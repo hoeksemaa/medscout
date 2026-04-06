@@ -12,7 +12,7 @@ export type SearchState =
       current?: number;
       total?: number;
     }
-  | { status: "results"; data: SearchResponse }
+  | { status: "results"; data: SearchResponse; searchId: string | null }
   | { status: "error"; message: string };
 
 export function useSearch() {
@@ -20,8 +20,6 @@ export function useSearch() {
 
   const search = useCallback(
     async (params: {
-      anthropicKey: string;
-      braveSearchKey: string;
       procedure: string;
       region?: string;
       countries?: string[];
@@ -84,7 +82,11 @@ export function useSearch() {
                   total: event.total,
                 });
               } else if (event.type === "result") {
-                setState({ status: "results", data: event.data });
+                setState({
+                  status: "results",
+                  data: event.data,
+                  searchId: event.searchId ?? null,
+                });
               } else if (event.type === "error") {
                 setState({ status: "error", message: event.message });
               }

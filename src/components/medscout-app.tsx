@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { ApiKeyForm } from "@/components/api-key-form";
+import { useCallback } from "react";
 import { SearchForm } from "@/components/search-form";
 import { SearchProgress } from "@/components/search-progress";
 import { ResultsTable } from "@/components/results-table";
@@ -13,19 +12,7 @@ interface MedScoutAppProps {
 }
 
 export function MedScoutApp({ countriesData }: MedScoutAppProps) {
-  const [keys, setKeys] = useState<{
-    anthropicKey: string;
-    braveSearchKey: string;
-  } | null>(null);
-
   const { state, search } = useSearch();
-
-  const handleKeysSet = useCallback(
-    (k: { anthropicKey: string; braveSearchKey: string }) => {
-      setKeys(k);
-    },
-    []
-  );
 
   const handleSearch = useCallback(
     (params: {
@@ -34,30 +21,23 @@ export function MedScoutApp({ countriesData }: MedScoutAppProps) {
       countries?: string[];
       resultCount: number;
     }) => {
-      if (!keys) return;
       search({
-        ...keys,
         ...params,
         region: params.region === "worldwide" ? undefined : params.region,
       });
     },
-    [keys, search]
+    [search]
   );
 
-  const keysConfigured = keys !== null;
   const isSearching = state.status === "searching";
 
   return (
     <div className="space-y-6">
-      <ApiKeyForm onKeysSet={handleKeysSet} />
-
-      {keysConfigured && (
-        <SearchForm
-          countriesData={countriesData}
-          onSearch={handleSearch}
-          disabled={isSearching}
-        />
-      )}
+      <SearchForm
+        countriesData={countriesData}
+        onSearch={handleSearch}
+        disabled={isSearching}
+      />
 
       {state.status === "searching" && (
         <SearchProgress
@@ -68,7 +48,12 @@ export function MedScoutApp({ countriesData }: MedScoutAppProps) {
         />
       )}
 
-      {state.status === "results" && <ResultsTable data={state.data} />}
+      {state.status === "results" && (
+        <ResultsTable
+          data={state.data}
+          searchId={state.searchId}
+        />
+      )}
 
       {state.status === "error" && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">

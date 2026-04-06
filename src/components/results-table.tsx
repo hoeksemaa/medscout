@@ -13,12 +13,16 @@ import {
   Users,
   CheckCircle,
   XCircle,
+  Lock,
 } from "lucide-react";
 import type { Candidate, SearchResponse } from "@/lib/types";
 import { candidatesToCSV } from "@/lib/use-search";
+import { VISIBLE_RESULTS_COUNT, UNLOCK_PRICE_USD } from "@/lib/constants";
 
 interface ResultsTableProps {
   data: SearchResponse;
+  searchId?: string | null;
+  unlocked?: boolean;
 }
 
 function confidenceColor(score: number): string {
@@ -31,23 +35,27 @@ function CandidateCard({
   candidate,
   expanded,
   onToggle,
+  blurred,
 }: {
   candidate: Candidate;
   expanded: boolean;
   onToggle: () => void;
+  blurred?: boolean;
 }) {
   const isRejected = candidate.status === "rejected";
 
   return (
     <div
       className={`border rounded-lg p-4 transition-colors ${
+        blurred ? "select-none" : ""
+      } ${
         isRejected
           ? "border-red-200 bg-red-50/30 opacity-75"
           : "hover:bg-muted/30"
       }`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
+        <div className={`flex-1 min-w-0 ${blurred ? "blur-sm pointer-events-none" : ""}`}>
           {/* Rank + Name + Status */}
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">
@@ -65,7 +73,7 @@ function CandidateCard({
             >
               {candidate.name}
             </h3>
-            {candidate.profileLink && (
+            {!blurred && candidate.profileLink && (
               <a
                 href={candidate.profileLink}
                 target="_blank"
@@ -88,14 +96,14 @@ function CandidateCard({
             </Badge>
           </div>
 
-          {/* Rejection reason — prominent for rejected candidates */}
+          {/* Rejection reason */}
           {isRejected && candidate.rejectionReason && (
             <p className="text-sm text-red-700 ml-8 mb-2 italic">
               {candidate.rejectionReason}
             </p>
           )}
 
-          {/* Notes — second most prominent element */}
+          {/* Notes */}
           <p className="text-sm text-foreground/80 ml-8 mb-2">
             {candidate.notes}
           </p>
@@ -109,7 +117,7 @@ function CandidateCard({
             <span>{candidate.specialty}</span>
           </div>
 
-          {/* Source — always visible */}
+          {/* Source */}
           <div className="ml-8 mt-1 text-xs text-muted-foreground">
             <span className="font-medium">Source:</span> {candidate.source}
           </div>
@@ -118,21 +126,23 @@ function CandidateCard({
         <div className="flex flex-col items-end gap-2 shrink-0">
           <Badge
             variant="outline"
-            className={`font-mono text-xs ${confidenceColor(candidate.confidence)}`}
+            className={`font-mono text-xs ${blurred ? "blur-sm" : confidenceColor(candidate.confidence)}`}
           >
             {candidate.confidence}
           </Badge>
-          <Button variant="ghost" size="sm" onClick={onToggle}>
-            {expanded ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </Button>
+          {!blurred && (
+            <Button variant="ghost" size="sm" onClick={onToggle}>
+              {expanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </Button>
+          )}
         </div>
       </div>
 
-      {expanded && (
+      {!blurred && expanded && (
         <div className="mt-3 ml-8 space-y-2 text-sm">
           <Separator />
           <div>
@@ -164,12 +174,17 @@ function CandidateCard({
   );
 }
 
-export function ResultsTable({ data }: ResultsTableProps) {
+export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableProps) {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [showRejected, setShowRejected] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
 
   const accepted = data.candidates.filter((c) => c.status === "accepted");
   const rejected = data.candidates.filter((c) => c.status === "rejected");
+
+  const visibleAccepted = unlocked ? accepted : accepted.slice(0, VISIBLE_RESULTS_COUNT);
+  const blurredAccepted = unlocked ? [] : accepted.slice(VISIBLE_RESULTS_COUNT);
+  const hasBlurred = blurredAccepted.length > 0;
 
   const toggleExpand = (rank: number) => {
     setExpandedIds((prev) => {
@@ -184,7 +199,8 @@ export function ResultsTable({ data }: ResultsTableProps) {
   };
 
   const handleDownload = () => {
-    const csv = candidatesToCSV(data.candidates, data.metadata.procedure);
+    const downloadCandidates = unlocked ? data.candidates : data.candidates.slice(0, VISIBLE_RESULTS_COUNT);
+    const csv = candidatesToCSV(downloadCandidates, data.metadata.procedure);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -194,6 +210,26 @@ export function ResultsTable({ data }: ResultsTableProps) {
     link.download = `medscout_${proc}_${date}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleUnlock = async () => {
+    if (!searchId) return;
+    setUnlocking(true);
+    try {
+      const res = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ searchId }),
+      });
+      const { url } = await res.json();
+      if (url) {
+        window.location.href = url;
+      }
+    } catch {
+      // handle error silently for now
+    } finally {
+      setUnlocking(false);
+    }
   };
 
   return (
@@ -232,7 +268,8 @@ export function ResultsTable({ data }: ResultsTableProps) {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {accepted.map((c) => (
+          {/* Visible results */}
+          {visibleAccepted.map((c) => (
             <CandidateCard
               key={c.rank}
               candidate={c}
@@ -240,6 +277,45 @@ export function ResultsTable({ data }: ResultsTableProps) {
               onToggle={() => toggleExpand(c.rank)}
             />
           ))}
+
+          {/* Blurred results + unlock CTA */}
+          {hasBlurred && (
+            <>
+              <div className="relative">
+                <div className="space-y-3">
+                  {blurredAccepted.slice(0, 3).map((c) => (
+                    <CandidateCard
+                      key={c.rank}
+                      candidate={c}
+                      expanded={false}
+                      onToggle={() => {}}
+                      blurred
+                    />
+                  ))}
+                </div>
+
+                {/* Overlay */}
+                <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-transparent via-background/80 to-background rounded-lg">
+                  <div className="text-center space-y-3 p-6">
+                    <Lock className="h-8 w-8 mx-auto text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      {blurredAccepted.length} more results available
+                    </p>
+                    <Button
+                      onClick={handleUnlock}
+                      disabled={unlocking || !searchId}
+                      className="bg-orange-500 text-white hover:bg-orange-600"
+                      size="lg"
+                    >
+                      {unlocking
+                        ? "Redirecting to payment..."
+                        : `Pay $${UNLOCK_PRICE_USD} to unlock full results`}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

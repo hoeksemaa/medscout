@@ -1,10 +1,15 @@
+export const dynamic = "force-dynamic";
+
 import countriesData from "@/data/countries.json";
 import type { CountriesData } from "@/lib/types";
 import { MedScoutApp } from "@/components/medscout-app";
+import { NavHeader } from "@/components/nav-header";
 
 export default function Home() {
   return (
     <main className="min-h-screen bg-background">
+      <NavHeader />
+
       {/* Disclaimer banner */}
       <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-xs text-amber-800">
         Results are AI-generated and should be independently verified before

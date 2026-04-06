@@ -11,7 +11,8 @@ import {
   buildScoringMessage,
 } from "@/lib/prompts";
 import { formatGeography } from "@/lib/countries";
-import type { Candidate, SearchRequest, SSEEvent } from "@/lib/types";
+import { createClient } from "@/lib/supabase/server";
+import type { Candidate, SearchResponse, SSEEvent } from "@/lib/types";
 
 function sendSSE(
   controller: ReadableStreamDefaultController,
@@ -25,19 +26,16 @@ function sendSSE(
 function parseCandidatesFromResponse(text: string): Candidate[] {
   let raw: Candidate[];
 
-  // Try <candidates> tags first
   const candidatesMatch = text.match(
     /<candidates>\s*([\s\S]*?)\s*<\/candidates>/
   );
   if (candidatesMatch) {
     raw = JSON.parse(candidatesMatch[1]);
   } else {
-    // Try <results> tags
     const resultsMatch = text.match(/<results>\s*([\s\S]*?)\s*<\/results>/);
     if (resultsMatch) {
       raw = JSON.parse(resultsMatch[1]);
     } else {
-      // Try to find a JSON array directly
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         raw = JSON.parse(jsonMatch[0]);
@@ -48,7 +46,6 @@ function parseCandidatesFromResponse(text: string): Candidate[] {
     }
   }
 
-  // Default status to "accepted" if model didn't include it
   return raw.map((c) => ({
     ...c,
     status: c.status || "accepted",
@@ -62,8 +59,9 @@ async function runDiscoveryPhase(
   resultCount: number,
   searchKey: string,
   sendProgress: (event: SSEEvent) => void
-): Promise<{ candidates: Candidate[]; searchCount: number }> {
+): Promise<{ candidates: Candidate[]; searchCount: number; durationMs: number }> {
   let searchCount = 0;
+  const start = Date.now();
 
   sendProgress({
     type: "progress",
@@ -75,7 +73,6 @@ async function runDiscoveryPhase(
     { role: "user", content: buildDiscoveryMessage(procedure, geography, resultCount) },
   ];
 
-  // Agentic loop: let Claude call web_search until it's done
   let response = await client.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 16000,
@@ -129,7 +126,6 @@ async function runDiscoveryPhase(
     });
   }
 
-  // Extract text from final response
   const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -143,7 +139,7 @@ async function runDiscoveryPhase(
     message: `Found ${candidates.length} candidates. Starting verification...`,
   });
 
-  return { candidates, searchCount };
+  return { candidates, searchCount, durationMs: Date.now() - start };
 }
 
 async function runVettingPhase(
@@ -151,9 +147,10 @@ async function runVettingPhase(
   procedure: string,
   searchKey: string,
   sendProgress: (event: SSEEvent) => void
-): Promise<{ vettingResults: Record<string, string>; searchCount: number }> {
+): Promise<{ vettingResults: Record<string, string>; searchCount: number; durationMs: number }> {
   const vettingResults: Record<string, string> = {};
   let searchCount = 0;
+  const start = Date.now();
 
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
@@ -176,7 +173,7 @@ async function runVettingPhase(
     }
   }
 
-  return { vettingResults, searchCount };
+  return { vettingResults, searchCount, durationMs: Date.now() - start };
 }
 
 async function runScoringPhase(
@@ -185,7 +182,9 @@ async function runScoringPhase(
   vettingResults: Record<string, string>,
   resultCount: number,
   sendProgress: (event: SSEEvent) => void
-): Promise<Candidate[]> {
+): Promise<{ scored: Candidate[]; durationMs: number }> {
+  const start = Date.now();
+
   sendProgress({
     type: "progress",
     phase: "scoring",
@@ -209,34 +208,52 @@ async function runScoringPhase(
     .map((b) => b.text)
     .join("\n");
 
-  return parseCandidatesFromResponse(text);
+  return { scored: parseCandidatesFromResponse(text), durationMs: Date.now() - start };
+}
+
+interface SearchRequestBody {
+  procedure: string;
+  region?: string;
+  countries?: string[];
+  resultCount?: number;
 }
 
 export async function POST(req: Request): Promise<Response> {
-  let body: SearchRequest;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const braveSearchKey = process.env.BRAVE_SEARCH_API_KEY;
+
+  if (!anthropicKey || !braveSearchKey) {
+    return Response.json(
+      { error: "Server API keys not configured" },
+      { status: 500 }
+    );
+  }
+
+  let body: SearchRequestBody;
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const {
-    anthropicKey,
-    braveSearchKey,
-    procedure,
-    region,
-    countries,
-    resultCount = 20,
-  } = body;
+  const { procedure, region, countries, resultCount = 20 } = body;
 
-  if (!anthropicKey || !braveSearchKey || !procedure) {
+  if (!procedure) {
     return Response.json(
-      { error: "Missing required fields: anthropicKey, braveSearchKey, procedure" },
+      { error: "Missing required field: procedure" },
       { status: 400 }
     );
   }
 
   const geography = formatGeography(region, countries);
+  const totalStart = Date.now();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -246,21 +263,27 @@ export async function POST(req: Request): Promise<Response> {
         const client = new Anthropic({ apiKey: anthropicKey });
 
         // Phase 1: Discovery
-        const { candidates: rawCandidates, searchCount: discoverySearches } =
-          await runDiscoveryPhase(
-            client,
-            procedure,
-            geography,
-            resultCount,
-            braveSearchKey,
-            send
-          );
+        const { candidates: rawCandidates, searchCount: discoverySearches, durationMs: discoveryMs } =
+          await runDiscoveryPhase(client, procedure, geography, resultCount, braveSearchKey, send);
 
         if (rawCandidates.length === 0) {
+          await supabase.from("searches").insert({
+            user_id: user.id,
+            procedure,
+            geography,
+            result_count: 0,
+            results_json: [],
+            discovery_searches: discoverySearches,
+            vetting_searches: 0,
+            candidates_dropped: 0,
+            duration_total_ms: Date.now() - totalStart,
+            duration_discovery_ms: discoveryMs,
+            error_type: "no_results",
+          });
+
           send({
             type: "error",
-            message:
-              "No candidates found. Try a different procedure name or broader geographic filter.",
+            message: "No candidates found. Try a different procedure name or broader geographic filter.",
           });
           send({ type: "done" });
           controller.close();
@@ -268,41 +291,65 @@ export async function POST(req: Request): Promise<Response> {
         }
 
         // Phase 2: Vetting
-        const { vettingResults, searchCount: vettingSearches } =
-          await runVettingPhase(
-            rawCandidates,
-            procedure,
-            braveSearchKey,
-            send
-          );
+        const { vettingResults, searchCount: vettingSearches, durationMs: vettingMs } =
+          await runVettingPhase(rawCandidates, procedure, braveSearchKey, send);
 
         // Phase 3: Scoring
-        const finalCandidates = await runScoringPhase(
-          client,
-          rawCandidates,
-          vettingResults,
-          resultCount,
-          send
-        );
+        const { scored: finalCandidates, durationMs: scoringMs } =
+          await runScoringPhase(client, rawCandidates, vettingResults, resultCount, send);
+
+        const totalMs = Date.now() - totalStart;
+
+        const responseData: SearchResponse = {
+          candidates: finalCandidates,
+          metadata: {
+            procedure,
+            geography,
+            totalDiscoverySearches: discoverySearches,
+            totalVettingSearches: vettingSearches,
+            candidatesDropped: rawCandidates.length - finalCandidates.length,
+            timestamp: new Date().toISOString(),
+          },
+        };
+
+        // Store in DB
+        const { data: searchRow } = await supabase
+          .from("searches")
+          .insert({
+            user_id: user.id,
+            procedure,
+            geography,
+            result_count: finalCandidates.length,
+            results_json: finalCandidates,
+            discovery_searches: discoverySearches,
+            vetting_searches: vettingSearches,
+            candidates_dropped: rawCandidates.length - finalCandidates.length,
+            duration_total_ms: totalMs,
+            duration_discovery_ms: discoveryMs,
+            duration_vetting_ms: vettingMs,
+            duration_scoring_ms: scoringMs,
+          })
+          .select("id")
+          .single();
 
         send({
           type: "result",
-          data: {
-            candidates: finalCandidates,
-            metadata: {
-              procedure,
-              geography,
-              totalDiscoverySearches: discoverySearches,
-              totalVettingSearches: vettingSearches,
-              candidatesDropped:
-                rawCandidates.length - finalCandidates.length,
-              timestamp: new Date().toISOString(),
-            },
-          },
+          data: responseData,
+          searchId: searchRow?.id ?? null,
         });
 
         send({ type: "done" });
       } catch (err) {
+        await supabase.from("searches").insert({
+          user_id: user.id,
+          procedure,
+          geography,
+          result_count: 0,
+          results_json: [],
+          duration_total_ms: Date.now() - totalStart,
+          error_type: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+        });
+
         send({
           type: "error",
           message: err instanceof Error ? err.message : "Unknown error occurred",

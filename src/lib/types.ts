@@ -14,8 +14,6 @@ export interface Candidate {
 }
 
 export interface SearchRequest {
-  anthropicKey: string;
-  braveSearchKey: string;
   procedure: string;
   region?: string;
   countries?: string[];
@@ -58,6 +56,6 @@ export interface CountriesData {
 
 export type SSEEvent =
   | { type: "progress"; phase: "discovery" | "vetting" | "scoring"; message: string; current?: number; total?: number }
-  | { type: "result"; data: SearchResponse }
+  | { type: "result"; data: SearchResponse; searchId?: string | null }
   | { type: "error"; message: string }
   | { type: "done" };
