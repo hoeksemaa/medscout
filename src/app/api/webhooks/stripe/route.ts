@@ -1,13 +1,5 @@
 import { getStripe } from "@/lib/stripe";
-import { createClient } from "@supabase/supabase-js";
-
-// Use service role client for webhook (bypasses RLS)
-function createServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-}
+import { createServiceClient } from "@/lib/supabase/service";
 
 export async function POST(req: Request): Promise<Response> {
   const body = await req.text();

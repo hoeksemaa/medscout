@@ -18,12 +18,13 @@ export default async function HistoryPage() {
       procedure,
       geography,
       result_count,
-      error_type,
-      created_at,
+      status,
+      error_message,
+      started_at,
       unlocks(id)
     `)
     .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+    .order("started_at", { ascending: false });
 
   return (
     <main className="min-h-screen bg-background">
@@ -47,7 +48,8 @@ export default async function HistoryPage() {
           <div className="space-y-3">
             {searches.map((s) => {
               const isUnlocked = Array.isArray(s.unlocks) && s.unlocks.length > 0;
-              const hasError = !!s.error_type;
+              const hasError = s.status === "failed";
+              const isRunning = s.status === "running";
 
               return (
                 <Link key={s.id} href={`/history/${s.id}`}>
@@ -59,7 +61,7 @@ export default async function HistoryPage() {
                           {s.geography && <span>{s.geography}</span>}
                           <span>{s.result_count} results</span>
                           <span>
-                            {new Date(s.created_at).toLocaleDateString("en-US", {
+                            {new Date(s.started_at).toLocaleDateString("en-US", {
                               month: "short",
                               day: "numeric",
                               year: "numeric",
@@ -71,6 +73,10 @@ export default async function HistoryPage() {
                         {hasError ? (
                           <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
                             Error
+                          </Badge>
+                        ) : isRunning ? (
+                          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                            Running
                           </Badge>
                         ) : isUnlocked ? (
                           <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">

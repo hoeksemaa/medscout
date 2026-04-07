@@ -23,11 +23,11 @@ export default async function SearchDetailPage({ params }: PageProps) {
       geography,
       result_count,
       results_json,
-      discovery_searches,
-      vetting_searches,
-      candidates_dropped,
-      error_type,
-      created_at,
+      search_count_discovery,
+      search_count_vetting,
+      status,
+      error_message,
+      started_at,
       unlocks(id)
     `)
     .eq("id", id)
@@ -46,10 +46,9 @@ export default async function SearchDetailPage({ params }: PageProps) {
     metadata: {
       procedure: search.procedure,
       geography: search.geography,
-      totalDiscoverySearches: search.discovery_searches ?? 0,
-      totalVettingSearches: search.vetting_searches ?? 0,
-      candidatesDropped: search.candidates_dropped ?? 0,
-      timestamp: search.created_at,
+      searchCountDiscovery: search.search_count_discovery ?? 0,
+      searchCountVetting: search.search_count_vetting ?? 0,
+      timestamp: search.started_at,
     },
   };
 
@@ -64,7 +63,7 @@ export default async function SearchDetailPage({ params }: PageProps) {
           </h1>
           <p className="text-sm text-muted-foreground">
             {search.geography ?? "Worldwide"} &middot;{" "}
-            {new Date(search.created_at).toLocaleDateString("en-US", {
+            {new Date(search.started_at).toLocaleDateString("en-US", {
               month: "long",
               day: "numeric",
               year: "numeric",
@@ -73,9 +72,9 @@ export default async function SearchDetailPage({ params }: PageProps) {
           </p>
         </div>
 
-        {search.error_type ? (
+        {search.status === "failed" ? (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            <strong>This search encountered an error:</strong> {search.error_type}
+            <strong>This search encountered an error:</strong> {search.error_message}
           </div>
         ) : (
           <ResultsTable

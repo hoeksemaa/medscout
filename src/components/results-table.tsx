@@ -258,8 +258,8 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
               <span>Region: {data.metadata.geography}</span>
             )}
             <span>
-              Searches: {data.metadata.totalDiscoverySearches} discovery +{" "}
-              {data.metadata.totalVettingSearches} vetting
+              Searches: {data.metadata.searchCountDiscovery} discovery +{" "}
+              {data.metadata.searchCountVetting} vetting
             </span>
             <span>
               Total candidates: {data.candidates.length} ({accepted.length}{" "}
