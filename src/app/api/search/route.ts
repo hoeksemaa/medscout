@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // Allow up to 5 minutes for the full discovery + vetting + scoring pipeline
 export const maxDuration = 300;
 
-import { webSearch, formatSearchResults } from "@/lib/google-search";
+import { webSearch, formatSearchResults } from "@/lib/web-search";
 import {
   SYSTEM_PROMPT,
   WEB_SEARCH_TOOL,
