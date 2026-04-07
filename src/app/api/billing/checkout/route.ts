@@ -49,7 +49,7 @@ export async function POST(req: Request): Promise<Response> {
           currency: "usd",
           unit_amount: UNLOCK_PRICE_USD * 100,
           product_data: {
-            name: `MedScout Search Unlock`,
+            name: `Dr. YellowPages Search Unlock`,
             description: `Full results for: ${search.procedure}`,
           },
         },

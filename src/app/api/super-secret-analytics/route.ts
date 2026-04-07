@@ -75,7 +75,7 @@ export async function GET() {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>MedScout Analytics</title>
+  <title>Dr. YellowPages Analytics</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 2rem; }
@@ -89,7 +89,7 @@ export async function GET() {
   </style>
 </head>
 <body>
-  <h1>MedScout Analytics</h1>
+  <h1>Dr. YellowPages Analytics</h1>
   <p class="subtitle">${searches.length} searches total</p>
   <div class="wrap">
     <table>

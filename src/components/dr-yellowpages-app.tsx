@@ -7,11 +7,11 @@ import { ResultsTable } from "@/components/results-table";
 import { useSearch } from "@/lib/use-search";
 import type { CountriesData } from "@/lib/types";
 
-interface MedScoutAppProps {
+interface DrYellowPagesAppProps {
   countriesData: CountriesData;
 }
 
-export function MedScoutApp({ countriesData }: MedScoutAppProps) {
+export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
   const { state, search } = useSearch();
 
   const handleSearch = useCallback(

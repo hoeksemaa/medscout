@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MedScout — Find Medical Professionals",
+  title: "Dr. YellowPages — Find Medical Professionals",
   description:
     "Discover physicians and surgeons who are actively using a specific medical device or performing a specific procedure.",
 };

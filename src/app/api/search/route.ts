@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // Allow up to 5 minutes for the full discovery + vetting + scoring pipeline
 export const maxDuration = 300;
 
-import { webSearch, formatSearchResults } from "@/lib/google-search";
+import { webSearch, formatSearchResults } from "@/lib/web-search";
 import {
   SYSTEM_PROMPT,
   WEB_SEARCH_TOOL,
@@ -337,6 +337,10 @@ async function runScoringPhase(
     .join("\n");
 
   const scored = parseCandidatesFromResponse(text);
+
+  // Deterministic sort: confidence descending, then reassign ranks
+  scored.sort((a, b) => b.confidence - a.confidence);
+  scored.forEach((c, i) => { c.rank = i + 1; });
 
   auditEntries.push(auditEntry("scoring", "phase_end", {
     accepted: scored.filter((c) => c.status === "accepted").length,
