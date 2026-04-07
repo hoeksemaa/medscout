@@ -338,6 +338,10 @@ async function runScoringPhase(
 
   const scored = parseCandidatesFromResponse(text);
 
+  // Deterministic sort: confidence descending, then reassign ranks
+  scored.sort((a, b) => b.confidence - a.confidence);
+  scored.forEach((c, i) => { c.rank = i + 1; });
+
   auditEntries.push(auditEntry("scoring", "phase_end", {
     accepted: scored.filter((c) => c.status === "accepted").length,
     rejected: scored.filter((c) => c.status === "rejected").length,

@@ -232,7 +232,9 @@ Query: `"{Name}" "{Institution}" {procedure}`
 This surfaces whether they exist at that institution, whether they're associated with the procedure, whether any obituary or retirement notice appears, and their institutional profile URL.
 
 ### Phase 3: Scoring
-The LLM receives the raw candidates plus their vetting search results. It assigns confidence scores per the rubric, writes Notes, ranks the list, marks the top N (where N = requested result count) as accepted and the rest as rejected with reasons, and drops anyone below the confidence threshold. The LLM returns scored candidates as a JSON array wrapped in `<results>` tags. Each candidate now includes `rank`, `status` ("accepted" | "rejected"), and optionally `rejectionReason`.
+The LLM receives the raw candidates plus their vetting search results. It assigns confidence scores per the rubric, writes Notes, marks the top N (where N = requested result count) as accepted and the rest as rejected with reasons, and drops anyone below the confidence threshold. The LLM returns scored candidates as a JSON array wrapped in `<results>` tags. Each candidate now includes `rank`, `status` ("accepted" | "rejected"), and optionally `rejectionReason`.
+
+After the LLM returns, the server deterministically sorts all candidates by confidence descending and reassigns rank 1–N. The LLM's ordering is not trusted — sorting is mechanically enforced.
 
 ### Progress UX
 During all phases, the server streams SSE events to the client. The frontend displays the current phase, a progress counter during vetting ("Vetting 7 of 20..."), and status messages. Once scoring completes, the full results table appears.
