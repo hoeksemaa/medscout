@@ -89,9 +89,22 @@ Use the web_search tool to search across PubMed, hospital websites, professional
 - Professional directory searches (Doximity, Healthgrades)
 - Conference/training searches (society meetings, fellowship programs)
 
-Return your findings as a JSON array wrapped in a <candidates> tag:
+Return your findings as a STRICT JSON array wrapped in <candidates> tags. The JSON must be valid — no trailing commas, no comments, no unescaped quotes inside strings. Use null (not "null") for missing profileLink values. Example:
+
 <candidates>
-[{"name": "...", "notes": "...", "institution": "...", "city": "...", "specialty": "...", "evidence": "...", "source": "...", "profileLink": "..." or null, "confidence": ...}, ...]
+[
+  {
+    "name": "Amy E. Krambeck, MD",
+    "notes": "High-volume HoLEP surgeon and fellowship director at Northwestern.",
+    "institution": "Northwestern Memorial Hospital",
+    "city": "Chicago, IL",
+    "specialty": "Urology",
+    "evidence": "Lead author on 5 published HoLEP case series (2020-2024)",
+    "source": "PubMed PMID 39197701",
+    "profileLink": "https://physicians.nm.org/details/1234",
+    "confidence": 85
+  }
+]
 </candidates>
 
 Remember: accuracy over completeness. Only include people you have reasonable evidence for. Say "Unknown" for any field you cannot confirm.`;
@@ -125,10 +138,38 @@ Then rank ALL candidates by confidence score (descending). The top ${resultCount
 
 For EVERY rejected candidate, you MUST include a "rejectionReason" field with a plain text explanation of why they didn't make the cut (e.g., "Confidence too low — no direct evidence of performing the procedure", "Appears to be deceased based on obituary in search results", "Institution could not be verified", "Not an MD — research assistant co-author only").
 
-Return ALL candidates (both accepted and rejected) as a JSON array wrapped in a <results> tag. Accepted candidates should be ranked 1 through ${resultCount}. Rejected candidates should be ranked ${resultCount + 1} and onward.
+Return ALL candidates (both accepted and rejected) as a STRICT JSON array wrapped in <results> tags. The JSON must be valid — no trailing commas, no comments, no unescaped quotes. Use null (not "null") for missing profileLink values. Example:
 
 <results>
-[{"rank": 1, "name": "...", "notes": "...", "institution": "...", "city": "...", "specialty": "...", "evidence": "...", "source": "...", "profileLink": "..." or null, "confidence": ..., "status": "accepted"}, {"rank": ${resultCount + 1}, "name": "...", "notes": "...", "institution": "...", "city": "...", "specialty": "...", "evidence": "...", "source": "...", "profileLink": "..." or null, "confidence": ..., "status": "rejected", "rejectionReason": "..."}, ...]
+[
+  {
+    "rank": 1,
+    "name": "Amy E. Krambeck, MD",
+    "notes": "High-volume surgeon and fellowship director.",
+    "institution": "Northwestern Memorial Hospital",
+    "city": "Chicago, IL",
+    "specialty": "Urology",
+    "evidence": "Lead author on 5 published case series",
+    "source": "PubMed PMID 39197701",
+    "profileLink": null,
+    "confidence": 85,
+    "status": "accepted"
+  },
+  {
+    "rank": ${resultCount + 1},
+    "name": "John Doe, MD",
+    "notes": "Co-author on one paper, no direct procedural evidence.",
+    "institution": "Unknown",
+    "city": "Unknown",
+    "specialty": "Gastroenterology",
+    "evidence": "Listed as co-author on a single review article",
+    "source": "PubMed PMID 12345678",
+    "profileLink": null,
+    "confidence": 18,
+    "status": "rejected",
+    "rejectionReason": "Confidence too low — no direct evidence of performing the procedure"
+  }
+]
 </results>`;
 }
 

@@ -25,9 +25,8 @@ export interface SearchResponse {
   metadata: {
     procedure: string;
     geography: string | null;
-    totalDiscoverySearches: number;
-    totalVettingSearches: number;
-    candidatesDropped: number;
+    searchCountDiscovery: number;
+    searchCountVetting: number;
     timestamp: string;
   };
 }
