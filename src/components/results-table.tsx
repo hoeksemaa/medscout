@@ -207,7 +207,7 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
     const date = new Date().toISOString().split("T")[0];
     const proc = data.metadata.procedure.replace(/\s+/g, "_").toLowerCase();
     link.href = url;
-    link.download = `medscout_${proc}_${date}.csv`;
+    link.download = `dr-yellowpages_${proc}_${date}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };

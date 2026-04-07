@@ -26,7 +26,7 @@ export function NavHeader() {
   return (
     <header className="border-b bg-background px-4 py-2 flex items-center justify-between">
       <Link href="/" className="font-semibold text-sm">
-        MedScout
+        Dr. YellowPages
       </Link>
       <div className="flex items-center gap-3">
         {email && (

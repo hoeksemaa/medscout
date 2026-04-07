@@ -1,11 +1,11 @@
-# MedScout: Medical Professional Discovery Search
+# Dr. YellowPages: Medical Professional Discovery Search
 
 ---
 
 # Files
 
 ```
-medscout/
+dr-yellowpages/
 ├── package.json                          — Dependencies and build scripts (Next.js 16, React 19, Anthropic SDK, Supabase, Stripe, Tailwind 4, shadcn/ui)
 ├── tsconfig.json                         — TypeScript config: strict mode, @/* path alias to ./src/*, ES2017 target
 ├── next.config.ts                        — Next.js configuration (currently minimal/empty)
@@ -48,8 +48,8 @@ medscout/
     │       └── proxy.ts                  — Auth middleware: refreshes sessions, redirects unauthed→/login, authed→away from auth pages
     │
     ├── components/
-    │   ├── medscout-app.tsx              — Client root: orchestrates search state, conditionally renders SearchForm/SearchProgress/ResultsTable/error
-    │   ├── nav-header.tsx                — Header bar: MedScout branding, user email, History link, logout button
+    │   ├── dr-yellowpages-app.tsx              — Client root: orchestrates search state, conditionally renders SearchForm/SearchProgress/ResultsTable/error
+    │   ├── nav-header.tsx                — Header bar: Dr. YellowPages branding, user email, History link, logout button
     │   ├── search-form.tsx               — Search input: procedure name, region/country filter, result count slider (5–50), estimated wait time
     │   ├── search-progress.tsx           — Progress display: current phase, progress bar, status messages during search
     │   ├── results-table.tsx             — Results: accepted candidate cards, collapsed rejected section, confidence badges, CSV download, unlock overlay
@@ -66,7 +66,7 @@ medscout/
     │
     └── app/
         ├── layout.tsx                    — Root layout: HTML metadata, Geist fonts, html/body wrapper
-        ├── page.tsx                      — Home page: disclaimer banner, app header, MedScoutApp with countries data
+        ├── page.tsx                      — Home page: disclaimer banner, app header, DrYellowPagesApp with countries data
         ├── globals.css                   — Tailwind imports, shadcn theme variables for light/dark modes
         ├── favicon.ico                   — Favicon
         ├── (auth)/
@@ -100,7 +100,7 @@ medscout/
 
 ## Purpose
 
-MedScout helps medical device companies find physicians and surgeons who are actively using a specific device or performing a specific procedure. A sales rep types in a procedure name, optionally narrows by geography, and receives a vetted list of practitioners with source citations, profile links, and a confidence score.
+Dr. YellowPages helps medical device companies find physicians and surgeons who are actively using a specific device or performing a specific procedure. A sales rep types in a procedure name, optionally narrows by geography, and receives a vetted list of practitioners with source citations, profile links, and a confidence score.
 
 The core value proposition: if a company already knows 10 names and we surface 20, and 3 of the new names turn into productive conversations, that's a win.
 
@@ -277,7 +277,7 @@ An internal analytics endpoint renders a server-side HTML dashboard of all searc
 
 The app displays a persistent banner:
 
-> Results are AI-generated and should be independently verified before commercial use. MedScout does not guarantee the accuracy, completeness, or currentness of any information displayed.
+> Results are AI-generated and should be independently verified before commercial use. Dr. YellowPages does not guarantee the accuracy, completeness, or currentness of any information displayed.
 
 ## Success Criteria
 
