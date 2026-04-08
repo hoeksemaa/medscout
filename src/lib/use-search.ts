@@ -23,7 +23,6 @@ export function useSearch() {
       procedure: string;
       region?: string;
       countries?: string[];
-      resultCount: number;
     }) => {
       setState({
         status: "searching",

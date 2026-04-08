@@ -19,7 +19,6 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
       procedure: string;
       region?: string;
       countries?: string[];
-      resultCount: number;
     }) => {
       search({
         ...params,

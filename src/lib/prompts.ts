@@ -1,4 +1,5 @@
 import type { Candidate } from "./types";
+import { MAX_CANDIDATES_TO_CONSIDER, MAX_ACCEPTED_RESULTS } from "./constants";
 
 export const SYSTEM_PROMPT = `You are a medical device industry research analyst. Your job is to find practicing medical professionals who are actively using a specific medical device or performing a specific medical procedure.
 
@@ -73,13 +74,12 @@ Obituary or retirement notice: EXCLUDE entirely.`;
 export function buildDiscoveryMessage(
   procedure: string,
   geography: string | null,
-  resultCount: number
 ): string {
   const geoClause = geography
     ? `Focus on medical professionals in: ${geography}.`
     : "Search worldwide. Note that results may skew toward countries with strong publication cultures (US, UK, EU, Japan, South Korea).";
 
-  return `Find approximately ${resultCount * 3} medical professionals who perform or are actively associated with: "${procedure}"
+  return `Find approximately ${MAX_CANDIDATES_TO_CONSIDER} medical professionals who perform or are actively associated with: "${procedure}"
 
 ${geoClause}
 
@@ -113,7 +113,6 @@ Remember: accuracy over completeness. Only include people you have reasonable ev
 export function buildScoringMessage(
   candidates: Candidate[],
   vettingResults: Record<string, string>,
-  resultCount: number
 ): string {
   const candidatesJson = JSON.stringify(candidates, null, 2);
   const vettingJson = JSON.stringify(vettingResults, null, 2);
@@ -134,7 +133,7 @@ For each candidate, review the verification search results and:
 5. Adjust the confidence score based on the scoring rubric
 6. Write or refine the Notes field — this should be a compelling 1-3 sentence summary
 
-Then rank ALL candidates by confidence score (descending). The top ${resultCount} candidates (by confidence) should be marked as "accepted". Everyone else should be marked as "rejected".
+Then rank ALL candidates by confidence score (descending). The top ${MAX_ACCEPTED_RESULTS} candidates (by confidence) should be marked as "accepted". Everyone else should be marked as "rejected".
 
 For EVERY rejected candidate, you MUST include a "rejectionReason" field with a plain text explanation of why they didn't make the cut (e.g., "Confidence too low — no direct evidence of performing the procedure", "Appears to be deceased based on obituary in search results", "Institution could not be verified", "Not an MD — research assistant co-author only").
 
@@ -156,7 +155,7 @@ Return ALL candidates (both accepted and rejected) as a STRICT JSON array wrappe
     "status": "accepted"
   },
   {
-    "rank": ${resultCount + 1},
+    "rank": ${MAX_ACCEPTED_RESULTS + 1},
     "name": "John Doe, MD",
     "notes": "Co-author on one paper, no direct procedural evidence.",
     "institution": "Unknown",

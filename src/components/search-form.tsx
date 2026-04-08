@@ -21,7 +21,6 @@ interface SearchFormProps {
     procedure: string;
     region?: string;
     countries?: string[];
-    resultCount: number;
   }) => void;
   disabled?: boolean;
 }
@@ -33,7 +32,6 @@ export function SearchForm({
 }: SearchFormProps) {
   const [procedure, setProcedure] = useState("");
   const [region, setRegion] = useState<string>("");
-  const [resultCount, setResultCount] = useState(20);
 
   const regionOptions = useMemo(() => {
     return Object.entries(countriesData.regions).map(([key, val]) => ({
@@ -48,7 +46,6 @@ export function SearchForm({
     onSearch({
       procedure: procedure.trim(),
       region: region || undefined,
-      resultCount,
     });
   };
 
@@ -67,43 +64,21 @@ export function SearchForm({
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Region (optional)</Label>
-              <Select value={region} onValueChange={(val) => setRegion(val ?? "")} disabled={disabled}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Worldwide" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="worldwide">Worldwide</SelectItem>
-                  {regionOptions.map((r) => (
-                    <SelectItem key={r.key} value={r.key}>
-                      {r.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="result-count">
-                Number of results ({resultCount})
-              </Label>
-              <Input
-                id="result-count"
-                type="range"
-                min={5}
-                max={50}
-                step={5}
-                value={resultCount}
-                onChange={(e) => setResultCount(Number(e.target.value))}
-                disabled={disabled}
-                className="cursor-pointer accent-orange-500"
-              />
-              <p className="text-xs text-muted-foreground">
-                ~{Math.ceil(resultCount * 0.1)} min estimated wait
-              </p>
-            </div>
+          <div className="space-y-2">
+            <Label>Region (optional)</Label>
+            <Select value={region} onValueChange={(val) => setRegion(val ?? "")} disabled={disabled}>
+              <SelectTrigger>
+                <SelectValue placeholder="Worldwide" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="worldwide">Worldwide</SelectItem>
+                {regionOptions.map((r) => (
+                  <SelectItem key={r.key} value={r.key}>
+                    {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <Button

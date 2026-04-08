@@ -17,7 +17,6 @@ export interface SearchRequest {
   procedure: string;
   region?: string;
   countries?: string[];
-  resultCount: number;
 }
 
 export interface SearchResponse {
