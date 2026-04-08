@@ -45,6 +45,4 @@ supabase/.temp/
 next-env.d.ts
 
 # claude
-AGENTS.md
-CLAUDE.md
 .claude/

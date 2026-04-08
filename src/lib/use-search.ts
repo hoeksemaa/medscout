@@ -7,8 +7,9 @@ export type SearchState =
   | { status: "idle" }
   | {
       status: "searching";
-      phase: "discovery" | "vetting" | "scoring";
+      phase: "discovery" | "filtering" | "research";
       message: string;
+      names: string[];
       current?: number;
       total?: number;
     }
@@ -28,6 +29,7 @@ export function useSearch() {
         status: "searching",
         phase: "discovery",
         message: "Starting search...",
+        names: [],
       });
 
       try {
@@ -54,6 +56,7 @@ export function useSearch() {
 
         const decoder = new TextDecoder();
         let buffer = "";
+        let currentNames: string[] = [];
 
         while (true) {
           const { done, value } = await reader.read();
@@ -77,9 +80,24 @@ export function useSearch() {
                   status: "searching",
                   phase: event.phase,
                   message: event.message,
+                  names: currentNames,
                   current: event.current,
                   total: event.total,
                 });
+              } else if (event.type === "candidates_discovered") {
+                currentNames = event.names;
+                setState((prev) =>
+                  prev.status === "searching"
+                    ? { ...prev, names: event.names }
+                    : prev,
+                );
+              } else if (event.type === "candidates_filtered") {
+                currentNames = event.names;
+                setState((prev) =>
+                  prev.status === "searching"
+                    ? { ...prev, names: event.names }
+                    : prev,
+                );
               } else if (event.type === "result") {
                 setState({
                   status: "results",
@@ -102,7 +120,7 @@ export function useSearch() {
         });
       }
     },
-    []
+    [],
   );
 
   const reset = useCallback(() => {
@@ -114,21 +132,22 @@ export function useSearch() {
 
 export function candidatesToCSV(
   candidates: Candidate[],
-  procedure: string
+  procedure: string,
 ): string {
   const headers = [
     "Rank",
     "Status",
     "Name",
-    "Notes",
+    "Summary",
     "Institution",
     "City",
     "Specialty",
     "Evidence",
     "Source",
     "Profile Link",
-    "Confidence",
+    "Score",
     "Rejection Reason",
+    "Rejection Stage",
   ];
 
   const escapeCSV = (val: string | number | null | undefined): string => {
@@ -145,18 +164,19 @@ export function candidatesToCSV(
       c.rank,
       c.status ?? "accepted",
       c.name,
-      c.notes,
+      c.summary,
       c.institution,
       c.city,
       c.specialty,
       c.evidence,
       c.source,
       c.profileLink ?? "",
-      c.confidence,
+      c.score,
       c.rejectionReason ?? "",
+      c.rejectionStage ?? "",
     ]
       .map(escapeCSV)
-      .join(",")
+      .join(","),
   );
 
   return [headers.join(","), ...rows].join("\n");

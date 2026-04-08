@@ -25,7 +25,7 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
         region: params.region === "worldwide" ? undefined : params.region,
       });
     },
-    [search]
+    [search],
   );
 
   const isSearching = state.status === "searching";
@@ -42,6 +42,7 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
         <SearchProgress
           phase={state.phase}
           message={state.message}
+          names={state.names}
           current={state.current}
           total={state.total}
         />
