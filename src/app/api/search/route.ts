@@ -885,32 +885,6 @@ export async function POST(req: Request): Promise<Response> {
         totalTokensIn += discovery.tokensIn;
         totalTokensOut += discovery.tokensOut;
 
-        if (discovery.candidates.length === 0) {
-          if (searchId) {
-            await serviceClient
-              .from("searches")
-              .update({
-                status: "failed",
-                error_message: "No candidates found. Try a different procedure name or broader geographic filter.",
-                search_count_discovery: discovery.searchCount,
-                tokens_in: totalTokensIn,
-                tokens_out: totalTokensOut,
-                duration_total_s: (Date.now() - totalStart) / 1000,
-                duration_discovery_s: discovery.durationMs / 1000,
-                audit_log: allAuditEntries,
-              })
-              .eq("id", searchId);
-          }
-
-          send({
-            type: "error",
-            message: "No candidates found. Try a different procedure name or broader geographic filter.",
-          });
-          send({ type: "done" });
-          controller.close();
-          return;
-        }
-
         // Phase 2: Filtering
         const filtering = await runFilteringPhase(
           anthropic, discovery.candidates, procedure, braveSearchKey, send,
