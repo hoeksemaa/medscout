@@ -4,14 +4,11 @@ export const UNLOCK_PRICE_USD = 1;
 /** Number of results shown unblurred in a locked search */
 export const VISIBLE_RESULTS_COUNT = 3;
 
-/** Max web searches during the discovery phase */
-export const MAX_DISCOVERY_SEARCHES = 100;
-
-/** Web searches per discovery round (one LLM call) */
-export const DISCOVERY_BATCH_SIZE = 10;
+/** Max web searches during the discovery phase (single agentic loop) */
+export const MAX_DISCOVERY_SEARCHES = 50;
 
 /** Max web searches per candidate in the research phase */
-export const MAX_RESEARCH_SEARCHES_PER_CANDIDATE = 5;
+export const MAX_RESEARCH_SEARCHES_PER_CANDIDATE = 10;
 
 /** Candidates per LLM call during filtering */
 export const FILTERING_BATCH_SIZE = 30;

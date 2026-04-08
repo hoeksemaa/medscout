@@ -10,7 +10,7 @@ import {
   CROSS_BATCH_DEDUP_SYSTEM_PROMPT,
   RESEARCH_SYSTEM_PROMPT,
   WEB_SEARCH_TOOL,
-  buildDiscoveryRoundMessage,
+  buildDiscoveryMessage,
   buildFilteringMessage,
   buildCrossBatchDedupMessage,
   buildResearchMessage,
@@ -19,7 +19,6 @@ import { formatGeography } from "@/lib/countries";
 import {
   MAX_ACCEPTED_RESULTS,
   MAX_DISCOVERY_SEARCHES,
-  DISCOVERY_BATCH_SIZE,
   MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
   FILTERING_BATCH_SIZE,
 } from "@/lib/constants";
@@ -30,7 +29,6 @@ import type {
   SearchResponse,
   SSEEvent,
   DiscoveryCandidate,
-  DiscoveryRoundOutput,
   FilteredCandidate,
   ResearchedCandidate,
 } from "@/lib/types";
@@ -121,11 +119,10 @@ async function runDiscoveryPhase(
   searchKey: string,
   sendProgress: (event: SSEEvent) => void,
 ): Promise<DiscoveryResult> {
-  let totalSearchCount = 0;
+  let searchCount = 0;
   let tokensIn = 0;
   let tokensOut = 0;
   const auditEntries: AuditEntry[] = [];
-  const allCandidates: DiscoveryCandidate[] = [];
   const start = Date.now();
 
   auditEntries.push(auditEntry("discovery", "phase_start"));
@@ -136,177 +133,132 @@ async function runDiscoveryPhase(
     message: `Searching for "${procedure}" specialists...`,
   });
 
-  // Run discovery in rounds
-  let roundNum = 0;
-  let consecutiveEmptyRounds = 0;
-  while (totalSearchCount < MAX_DISCOVERY_SEARCHES) {
-    roundNum++;
-    let roundSearchCount = 0;
+  // Single agentic loop — one LLM context sees all search results
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: buildDiscoveryMessage(procedure, geography) },
+  ];
 
-    const messages: Anthropic.MessageParam[] = [
-      {
-        role: "user",
-        content: buildDiscoveryRoundMessage(
-          procedure,
-          geography,
-          allCandidates,
-          totalSearchCount,
-          MAX_DISCOVERY_SEARCHES,
-        ),
-      },
-    ];
+  let response = await client.messages.create({
+    model: LLM_MODEL,
+    max_tokens: 16000,
+    system: DISCOVERY_SYSTEM_PROMPT,
+    tools: [WEB_SEARCH_TOOL],
+    messages,
+  });
 
-    auditEntries.push(auditEntry("discovery", "round_start", { round: roundNum }));
+  tokensIn += response.usage.input_tokens;
+  tokensOut += response.usage.output_tokens;
 
-    // Agentic tool-use loop for this round
-    let response = await client.messages.create({
-      model: LLM_MODEL,
-      max_tokens: 16000,
-      system: DISCOVERY_SYSTEM_PROMPT,
-      tools: [WEB_SEARCH_TOOL],
-      messages,
-    });
+  while (response.stop_reason === "tool_use") {
+    const assistantContent = response.content;
+    messages.push({ role: "assistant", content: assistantContent });
 
-    tokensIn += response.usage.input_tokens;
-    tokensOut += response.usage.output_tokens;
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
-    while (response.stop_reason === "tool_use") {
-      const assistantContent = response.content;
-      messages.push({ role: "assistant", content: assistantContent });
+    for (const block of assistantContent) {
+      if (block.type === "tool_use" && block.name === "web_search") {
+        const query = (block.input as { query: string }).query;
+        searchCount++;
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        sendProgress({
+          type: "progress",
+          phase: "discovery",
+          message: `Search ${searchCount}: "${query.slice(0, 80)}${query.length > 80 ? "..." : ""}"`,
+        });
 
-      for (const block of assistantContent) {
-        if (block.type === "tool_use" && block.name === "web_search") {
-          const query = (block.input as { query: string }).query;
-          roundSearchCount++;
-          totalSearchCount++;
-
-          sendProgress({
-            type: "progress",
-            phase: "discovery",
-            message: `Search ${totalSearchCount}: "${query.slice(0, 80)}${query.length > 80 ? "..." : ""}"`,
+        try {
+          const results = await webSearch(query, searchKey);
+          auditEntries.push(auditEntry("discovery", "web_search", {
+            query,
+            result_count: results.length,
+          }));
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: formatSearchResults(results),
           });
-
-          try {
-            const results = await webSearch(query, searchKey);
-            auditEntries.push(auditEntry("discovery", "web_search", {
-              round: roundNum,
-              query,
-              result_count: results.length,
-            }));
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: block.id,
-              content: formatSearchResults(results),
-            });
-          } catch (err) {
-            auditEntries.push(auditEntry("discovery", "web_search_error", {
-              round: roundNum,
-              query,
-              error: err instanceof Error ? err.message : "unknown",
-            }));
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: block.id,
-              content: `Search error: ${err instanceof Error ? err.message : "Unknown error"}`,
-              is_error: true,
-            });
-          }
+        } catch (err) {
+          auditEntries.push(auditEntry("discovery", "web_search_error", {
+            query,
+            error: err instanceof Error ? err.message : "unknown",
+          }));
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: `Search error: ${err instanceof Error ? err.message : "Unknown error"}`,
+            is_error: true,
+          });
         }
       }
-
-      messages.push({ role: "user", content: toolResults });
-
-      // If we've hit the per-round cap, make a final call WITHOUT tools to force JSON output
-      if (roundSearchCount >= DISCOVERY_BATCH_SIZE) {
-        response = await client.messages.create({
-          model: LLM_MODEL,
-          max_tokens: 16000,
-          system: DISCOVERY_SYSTEM_PROMPT,
-          messages,
-        });
-      } else {
-        response = await client.messages.create({
-          model: LLM_MODEL,
-          max_tokens: 16000,
-          system: DISCOVERY_SYSTEM_PROMPT,
-          tools: [WEB_SEARCH_TOOL],
-          messages,
-        });
-      }
-
-      tokensIn += response.usage.input_tokens;
-      tokensOut += response.usage.output_tokens;
     }
 
-    // Parse the round's output
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    messages.push({ role: "user", content: toolResults });
 
-    let roundOutput: DiscoveryRoundOutput;
-    try {
-      roundOutput = parseJSON<DiscoveryRoundOutput>(text, "candidates");
-    } catch {
-      // Parse failure in a single round shouldn't kill discovery — try the next round
-      auditEntries.push(auditEntry("discovery", "parse_error", {
-        round: roundNum,
-        text_preview: text.slice(0, 300),
-      }));
-      consecutiveEmptyRounds++;
-      if (consecutiveEmptyRounds >= 2) break;
-      continue;
-    }
-
-    const newCandidates = roundOutput.candidates ?? [];
-    allCandidates.push(...newCandidates);
-
-    auditEntries.push(auditEntry("discovery", "round_end", {
-      round: roundNum,
-      new_candidates: newCandidates.length,
-      total_candidates: allCandidates.length,
-      searches_this_round: roundSearchCount,
-      exhausted: roundOutput.exhausted,
-    }));
-
-    // Stream current name list to frontend
-    sendProgress({
-      type: "progress",
-      phase: "discovery",
-      message: `Round ${roundNum} complete — ${allCandidates.length} candidates found so far`,
-    });
-
-    if (allCandidates.length > 0) {
-      sendProgress({
-        type: "candidates_discovered",
-        names: allCandidates.map((c) => c.name),
+    // If we've hit the search cap, strip tools to force the LLM to produce candidate JSON
+    if (searchCount >= MAX_DISCOVERY_SEARCHES) {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: DISCOVERY_SYSTEM_PROMPT,
+        messages,
+      });
+    } else {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: DISCOVERY_SYSTEM_PROMPT,
+        tools: [WEB_SEARCH_TOOL],
+        messages,
       });
     }
 
-    // Track consecutive empty rounds — a single dry round shouldn't kill discovery
-    if (newCandidates.length === 0) {
-      consecutiveEmptyRounds++;
-    } else {
-      consecutiveEmptyRounds = 0;
-    }
+    tokensIn += response.usage.input_tokens;
+    tokensOut += response.usage.output_tokens;
+  }
 
-    // Stop conditions
-    if (roundOutput.exhausted && allCandidates.length > 0) break;
-    if (consecutiveEmptyRounds >= 2) break;
-    if (totalSearchCount >= MAX_DISCOVERY_SEARCHES) break;
+  // Parse the final output
+  const text = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+
+  let candidates: DiscoveryCandidate[] = [];
+  try {
+    const parsed = parseJSON<{ candidates: DiscoveryCandidate[] }>(text, "candidates");
+    candidates = parsed.candidates ?? [];
+  } catch {
+    auditEntries.push(auditEntry("discovery", "parse_error", {
+      text_preview: text.slice(0, 500),
+    }));
+    // Try to salvage — look for array directly
+    try {
+      candidates = parseJSON<DiscoveryCandidate[]>(text, "candidates");
+    } catch {
+      // truly unparseable
+    }
   }
 
   auditEntries.push(auditEntry("discovery", "phase_end", {
-    total_candidates: allCandidates.length,
-    total_searches: totalSearchCount,
-    rounds: roundNum,
+    total_candidates: candidates.length,
+    total_searches: searchCount,
   }));
 
+  sendProgress({
+    type: "progress",
+    phase: "discovery",
+    message: `Discovery complete — ${candidates.length} candidates found in ${searchCount} searches`,
+  });
+
+  if (candidates.length > 0) {
+    sendProgress({
+      type: "candidates_discovered",
+      names: candidates.map((c) => c.name),
+    });
+  }
+
   return {
-    candidates: allCandidates,
-    searchCount: totalSearchCount,
+    candidates,
+    searchCount,
     durationMs: Date.now() - start,
     tokensIn,
     tokensOut,
