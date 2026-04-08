@@ -14,12 +14,6 @@ export interface Candidate {
   rejectionStage?: "filtering" | "research" | "score";
 }
 
-/** Discovery round LLM output */
-export interface DiscoveryRoundOutput {
-  candidates: DiscoveryCandidate[];
-  exhausted: boolean;
-}
-
 /** Discovery output — minimal, names only */
 export interface DiscoveryCandidate {
   name: string;
@@ -30,6 +24,12 @@ export interface DiscoveryCandidate {
 export interface FilteredCandidate {
   name: string;
   notes: string;
+}
+
+/** Filtering rejection record */
+export interface FilterRejection {
+  name: string;
+  rejectionReason: string;
 }
 
 /** Research output — full candidate with score */
@@ -45,6 +45,30 @@ export interface ResearchedCandidate {
   profileLink: string | null;
   disqualified: boolean;
   disqualificationReason?: string;
+}
+
+/** Pipeline state persisted to Supabase between chunks */
+export type PipelineStep =
+  | { phase: "discovery"; round: number; candidates: DiscoveryCandidate[]; searchCount: number }
+  | { phase: "filtering"; candidates: DiscoveryCandidate[] }
+  | { phase: "research"; batch: number; surviving: FilteredCandidate[]; rejected: FilterRejection[]; researched: ResearchedCandidate[] }
+  | { phase: "score"; surviving: FilteredCandidate[]; rejected: FilterRejection[]; researched: ResearchedCandidate[] }
+  | { phase: "done" };
+
+export interface PipelineState {
+  step: PipelineStep;
+  tokensIn: number;
+  tokensOut: number;
+  auditEntries: AuditEntry[];
+  timings: { discoveryMs?: number; filteringMs?: number; researchMs?: number };
+  searchCounts: { discovery?: number; filtering?: number; research?: number };
+}
+
+export interface AuditEntry {
+  phase: "discovery" | "filtering" | "research";
+  event_type: string;
+  timestamp: string;
+  data: Record<string, unknown>;
 }
 
 export interface SearchRequest {
@@ -91,6 +115,7 @@ export type SSEEvent =
   | { type: "progress"; phase: "discovery" | "filtering" | "research"; message: string; current?: number; total?: number }
   | { type: "candidates_discovered"; names: string[] }
   | { type: "candidates_filtered"; names: string[] }
+  | { type: "chunk_done"; searchId: string }
   | { type: "result"; data: SearchResponse; searchId?: string | null }
   | { type: "error"; message: string }
   | { type: "done" };
