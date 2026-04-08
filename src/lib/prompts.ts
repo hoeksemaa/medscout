@@ -1,4 +1,5 @@
 import type { DiscoveryCandidate, FilteredCandidate } from "./types";
+import { MAX_DISCOVERY_TOTAL_SEARCHES } from "./constants";
 
 // ---------------------------------------------------------------------------
 // Shared base prompt — prepended to every phase-specific system prompt
@@ -40,7 +41,7 @@ Search across ALL of these source types (not just a few):
 - Google Scholar (author profiles, citation lists, "cited by" chains)
 - Hospital/institutional websites ("find a doctor" pages)
 - Professional directories (Doximity, Healthgrades)
-- LinkedIn (site:linkedin.com "{procedure}" physician OR surgeon OR MD)
+- LinkedIn — particularly useful for finding practicing doctors (site:linkedin.com "{procedure}" physician OR surgeon OR MD)
 - Conference proceedings (specialty society annual meetings, invited speakers, faculty lists)
 - Specialty journals and trade publications
 - Training programs and fellowship directories
@@ -69,19 +70,31 @@ When you are done searching, return ALL found candidates as a JSON object wrappe
 
 Keep notes brief — one sentence explaining where/why you found this person. Enough context for a later deduplication step, not a full evaluation.`;
 
-export function buildDiscoveryMessage(
+export function buildDiscoveryRoundMessage(
   procedure: string,
   geography: string | null,
+  accumulatedCandidates: DiscoveryCandidate[],
+  totalSearchesSoFar: number,
 ): string {
   const geoClause = geography
     ? `Focus on medical professionals in: ${geography}.`
     : "Search worldwide. Note that results may skew toward countries with strong publication cultures (US, UK, EU, Japan, South Korea).";
 
+  const remaining = MAX_DISCOVERY_TOTAL_SEARCHES - totalSearchesSoFar;
+
+  const accumulatedList = accumulatedCandidates.length > 0
+    ? accumulatedCandidates.map((c) => `- ${c.name}: ${c.notes}`).join("\n")
+    : "(none yet)";
+
   return `Find medical professionals who perform or are actively associated with: "${procedure}"
 
 ${geoClause}
 
-Search broadly and thoroughly across many different source types. Use your full search budget — do not stop early. Each search should target a different angle: publications, institutional directories, conference proceedings, professional networks, device company sites, clinical trials, etc.
+## Already Found (${accumulatedCandidates.length} candidates)
+${accumulatedList}
+
+## Search Budget
+You have ${remaining} web searches remaining in your total budget. Use your full allocation this round — do not stop early. Each search should target a different angle: publications, institutional directories, conference proceedings, professional networks (especially LinkedIn), device company sites, clinical trials, etc.${accumulatedCandidates.length > 0 ? " Search DIFFERENT angles from what found the candidates above." : ""}
 
 Your goal is to build the largest viable candidate pool possible. Include anyone who plausibly performs or is associated with this procedure. Better to include a marginal candidate than to miss a real one — later stages will filter and evaluate.`;
 }
