@@ -33,68 +33,57 @@ You are NOT scoring, ranking, or deeply evaluating anyone. You care about one bi
 
 ## Search Strategy
 
-Use diverse queries across these source types:
+You have a large search budget. USE IT ALL. Be curious, thorough, and relentless. Every search should target a different source type or angle. Even if early searches return thin results, keep going — later searches with different queries often surface candidates that generic queries miss.
+
+Search across ALL of these source types (not just a few):
 - PubMed / medical journals (procedure name + author affiliations)
+- Google Scholar (author profiles, citation lists, "cited by" chains)
 - Hospital/institutional websites ("find a doctor" pages)
 - Professional directories (Doximity, Healthgrades)
 - LinkedIn (site:linkedin.com "{procedure}" physician OR surgeon OR MD)
-- Conference proceedings (specialty society meetings, invited speakers)
+- Conference proceedings (specialty society annual meetings, invited speakers, faculty lists)
 - Specialty journals and trade publications
 - Training programs and fellowship directories
 - YouTube (surgeons often post educational/procedural videos)
-- ResearchGate and Google Scholar author profiles
+- ResearchGate author profiles
 - Medical device company websites (KOL lists, proctors, training faculty)
 - News articles and press releases
 - Relevant trade press (Urology Times, Endoscopy International, etc.)
+- State medical board registries
+- Clinical trial registries (clinicaltrials.gov)
 
-Vary your queries across source types. Don't search the same angle twice. Cast wide — obvious names AND non-obvious ones.
+Do NOT stop searching just because you found some names. The goal is to find EVERY plausible candidate — the obvious leaders AND the non-obvious community practitioners, early-career adopters, and international experts. Cast the widest possible net.
 
 ## Output Format
 
-Return ONLY newly found candidates (not ones already in the accumulated list) as a JSON object wrapped in <candidates> tags:
+When you are done searching, return ALL found candidates as a JSON object wrapped in <candidates> tags:
 
 <candidates>
 {
   "candidates": [
     { "name": "Amy E. Krambeck, MD", "notes": "Found via PubMed — lead author on HoLEP case series" },
     { "name": "Robert Stein", "notes": "Mentioned in Northwestern fellowship directory" }
-  ],
-  "exhausted": false
+  ]
 }
 </candidates>
 
-Set "exhausted" to true if you believe you have found the majority of viable candidates for this procedure — e.g., you are seeing the same names repeatedly across searches, or the procedure is niche enough that the pool is small. When in doubt, set false.
-
 Keep notes brief — one sentence explaining where/why you found this person. Enough context for a later deduplication step, not a full evaluation.`;
 
-export function buildDiscoveryRoundMessage(
+export function buildDiscoveryMessage(
   procedure: string,
   geography: string | null,
-  accumulatedCandidates: DiscoveryCandidate[],
-  totalSearchesSoFar: number,
-  maxSearches: number,
 ): string {
   const geoClause = geography
     ? `Focus on medical professionals in: ${geography}.`
     : "Search worldwide. Note that results may skew toward countries with strong publication cultures (US, UK, EU, Japan, South Korea).";
 
-  const remaining = maxSearches - totalSearchesSoFar;
-
-  const accumulatedList = accumulatedCandidates.length > 0
-    ? accumulatedCandidates.map((c) => `- ${c.name}: ${c.notes}`).join("\n")
-    : "(none yet)";
-
   return `Find medical professionals who perform or are actively associated with: "${procedure}"
 
 ${geoClause}
 
-## Already Found (${accumulatedCandidates.length} candidates)
-${accumulatedList}
+Search broadly and thoroughly across many different source types. Use your full search budget — do not stop early. Each search should target a different angle: publications, institutional directories, conference proceedings, professional networks, device company sites, clinical trials, etc.
 
-## This Round
-You have ${remaining} web searches remaining in your total budget. You MUST use all 10 searches this round — do not stop early. Each search should target a different source type or angle. Even if early searches return thin results, later searches with different queries often surface candidates that generic queries miss. Exhaust all 10 before returning your candidates.
-
-Only set "exhausted" to true if you are confident that further searching would be redundant — e.g., you are seeing the exact same names across every search, or the procedure is exceptionally niche with fewer than ~15 known practitioners worldwide. When in doubt, set false.`;
+Your goal is to build the largest viable candidate pool possible. Include anyone who plausibly performs or is associated with this procedure. Better to include a marginal candidate than to miss a real one — later stages will filter and evaluate.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,12 +98,11 @@ You are in the filtering phase. You receive a batch of candidate names (with bri
 
 1. DEDUPLICATE: Identify candidates who are the same person appearing under different names (e.g., "John Smith" and "John A. Smith, MD" at the same institution). Merge them, keeping the most professional name variant (full credentials, proper formatting). Merge their notes.
 
-2. DISQUALIFY: Flag candidates if the evidence shows any of these:
-   - Deceased (obituary, "in memoriam," "passed away")
-   - Retired from clinical practice
-   - No longer practicing medicine
-   - Not a medical professional (e.g., a journalist or policy analyst who wrote about the procedure)
-   - If uncertain, keep them — filtering should err on the side of inclusion
+2. DISQUALIFY: Flag candidates ONLY if there is strong, unambiguous evidence of:
+   - Deceased (explicit obituary, "in memoriam," "passed away")
+   - Fully retired from clinical practice (explicit retirement announcement, not just age or seniority)
+   - Not a medical professional (clearly a journalist, policy analyst, or non-clinical researcher with zero patient care)
+   - If there is ANY doubt, KEEP THEM. Filtering must err heavily on the side of inclusion. A marginal candidate who survives filtering costs nothing — the research phase will evaluate them properly. A real candidate killed in filtering is gone forever.
 
 3. NORMALIZE NAMES: Use the most professional version. "Robert J. Stein, MD" over "Rob Stein." Include credentials when found.
 
@@ -211,23 +199,23 @@ export const RESEARCH_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
 
 ## Your Role: Research
 
-You are researching one specific medical professional to understand their relationship to a given procedure or device. You will conduct up to 5 web searches to build a complete picture.
+You are researching one specific medical professional to understand their relationship to a given procedure or device. You have 10 web searches to build the most complete picture possible.
 
 ## Search Strategy
 
-Investigate across multiple angles:
-- Published articles and citation counts (PubMed, Google Scholar)
-- LinkedIn profile and professional background
-- Institutional physician profile page
-- Device company mentions (proctor lists, training faculty, KOL programs)
-- Conference appearances (invited speaker, faculty, panelist)
-- Personal website, YouTube channel, educational content
-- Patient reviews or hospital marketing mentioning the procedure
-- Any other publicly available evidence
+You MUST use all 10 searches. Investigate across ALL of these angles:
+1. PubMed search: "{name}" + procedure/device name
+2. Google Scholar: author profile, citation count, h-index
+3. LinkedIn profile and professional background
+4. Institutional physician profile page (hospital "find a doctor")
+5. Device company mentions (proctor lists, training faculty, KOL programs)
+6. Conference appearances (invited speaker, faculty, panelist)
+7. Personal website, YouTube channel, educational content
+8. Patient reviews or hospital marketing mentioning the procedure
+9. Clinical trials (clinicaltrials.gov with their name)
+10. Any remaining angle — news articles, Doximity, ResearchGate, awards
 
-## Budget Management
-
-You have up to 5 searches. You may stop early if you have built a complete picture before using all 5. Do NOT cut research short just because early results look thin — a candidate with few academic citations may be a community practitioner or non-academic expert. Use the full budget to investigate thoroughly before scoring.
+Do NOT stop early. Do NOT skip angles because you think you have enough. A candidate who looks thin after 3 searches may reveal dense evidence on searches 7-10 (e.g., a community practitioner with no publications but extensive conference faculty listings and device company proctoring). Use all 10 searches before scoring.
 
 ## Scoring Rubric
 
@@ -281,7 +269,7 @@ export function buildResearchMessage(
 Name: ${name}
 Discovery notes: ${notes}
 
-Conduct up to 5 web searches. Produce a professional summary, evidence trail, and score per the rubric.`;
+Conduct all 10 web searches across different angles. Produce a professional summary, evidence trail, and score per the rubric.`;
 }
 
 // ---------------------------------------------------------------------------
