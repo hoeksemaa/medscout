@@ -1,26 +1,49 @@
 import Anthropic from "@anthropic-ai/sdk";
+import pLimit from "p-limit";
 
-// Allow up to 5 minutes for the full discovery + vetting + scoring pipeline
 export const maxDuration = 300;
 
 import { webSearch, formatSearchResults } from "@/lib/web-search";
 import {
-  SYSTEM_PROMPT,
+  DISCOVERY_SYSTEM_PROMPT,
+  FILTERING_SYSTEM_PROMPT,
+  CROSS_BATCH_DEDUP_SYSTEM_PROMPT,
+  RESEARCH_SYSTEM_PROMPT,
   WEB_SEARCH_TOOL,
-  buildDiscoveryMessage,
-  buildScoringMessage,
+  buildDiscoveryRoundMessage,
+  buildFilteringMessage,
+  buildCrossBatchDedupMessage,
+  buildResearchMessage,
 } from "@/lib/prompts";
 import { formatGeography } from "@/lib/countries";
-import { MAX_ACCEPTED_RESULTS } from "@/lib/constants";
+import {
+  MAX_ACCEPTED_RESULTS,
+  MAX_DISCOVERY_SEARCHES,
+  DISCOVERY_BATCH_SIZE,
+  MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
+  FILTERING_BATCH_SIZE,
+} from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import type { Candidate, SearchResponse, SSEEvent } from "@/lib/types";
+import type {
+  Candidate,
+  SearchResponse,
+  SSEEvent,
+  DiscoveryCandidate,
+  DiscoveryRoundOutput,
+  FilteredCandidate,
+  ResearchedCandidate,
+} from "@/lib/types";
 
 const SEARCH_ENGINE = "brave";
 const LLM_MODEL = "claude-sonnet-4-5";
 
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
 interface AuditEntry {
-  phase: "discovery" | "vetting" | "scoring";
+  phase: "discovery" | "filtering" | "research";
   event_type: string;
   timestamp: string;
   data: Record<string, unknown>;
@@ -29,14 +52,14 @@ interface AuditEntry {
 function auditEntry(
   phase: AuditEntry["phase"],
   event_type: string,
-  data: Record<string, unknown> = {}
+  data: Record<string, unknown> = {},
 ): AuditEntry {
   return { phase, event_type, timestamp: new Date().toISOString(), data };
 }
 
 function sendSSE(
   controller: ReadableStreamDefaultController,
-  event: SSEEvent
+  event: SSEEvent,
 ): void {
   const encoder = new TextEncoder();
   const data = JSON.stringify(event);
@@ -44,61 +67,46 @@ function sendSSE(
 }
 
 function repairJSON(str: string): string {
-  // Strip trailing commas before ] or }
   let fixed = str.replace(/,\s*([}\]])/g, "$1");
-  // Fix unescaped newlines inside strings
   fixed = fixed.replace(/(?<=:\s*"[^"]*)\n([^"]*")/g, "\\n$1");
-  // Strip JS-style comments
   fixed = fixed.replace(/\/\/[^\n]*/g, "");
   return fixed;
 }
 
-function parseCandidatesFromResponse(text: string): Candidate[] {
-  let jsonStr: string | null = null;
+function parseJSON<T>(text: string, tag: string): T {
+  const re = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`);
+  const match = text.match(re);
+  let jsonStr = match?.[1] ?? null;
 
-  const candidatesMatch = text.match(
-    /<candidates>\s*([\s\S]*?)\s*<\/candidates>/
-  );
-  if (candidatesMatch) {
-    jsonStr = candidatesMatch[1];
-  } else {
-    const resultsMatch = text.match(/<results>\s*([\s\S]*?)\s*<\/results>/);
-    if (resultsMatch) {
-      jsonStr = resultsMatch[1];
-    } else {
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[0];
-      }
-    }
+  if (!jsonStr) {
+    // Fallback: try to find raw JSON
+    const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    jsonStr = jsonMatch?.[0] ?? null;
   }
 
   if (!jsonStr) {
     const preview = text.slice(0, 500).replace(/\n/g, " ");
-    throw new Error(`Could not parse candidates. Model returned: ${preview}`);
+    throw new Error(`Could not find <${tag}> in LLM response. Preview: ${preview}`);
   }
 
-  let raw: Candidate[];
   try {
-    raw = JSON.parse(jsonStr);
+    return JSON.parse(jsonStr);
   } catch {
-    // Try repairing common JSON issues
     try {
-      raw = JSON.parse(repairJSON(jsonStr));
+      return JSON.parse(repairJSON(jsonStr));
     } catch (e) {
       const preview = jsonStr.slice(0, 500).replace(/\n/g, " ");
-      throw new Error(`JSON parse failed after repair attempt: ${e instanceof Error ? e.message : "unknown"}. Preview: ${preview}`);
+      throw new Error(`JSON parse failed for <${tag}>: ${e instanceof Error ? e.message : "unknown"}. Preview: ${preview}`);
     }
   }
-
-  return raw.map((c) => ({
-    ...c,
-    status: c.status || "accepted",
-  }));
 }
 
+// ---------------------------------------------------------------------------
+// Phase 1: Discovery
+// ---------------------------------------------------------------------------
+
 interface DiscoveryResult {
-  candidates: Candidate[];
+  candidates: DiscoveryCandidate[];
   searchCount: number;
   durationMs: number;
   tokensIn: number;
@@ -111,12 +119,13 @@ async function runDiscoveryPhase(
   procedure: string,
   geography: string | null,
   searchKey: string,
-  sendProgress: (event: SSEEvent) => void
+  sendProgress: (event: SSEEvent) => void,
 ): Promise<DiscoveryResult> {
-  let searchCount = 0;
+  let totalSearchCount = 0;
   let tokensIn = 0;
   let tokensOut = 0;
   const auditEntries: AuditEntry[] = [];
+  const allCandidates: DiscoveryCandidate[] = [];
   const start = Date.now();
 
   auditEntries.push(auditEntry("discovery", "phase_start"));
@@ -127,24 +136,416 @@ async function runDiscoveryPhase(
     message: `Searching for "${procedure}" specialists...`,
   });
 
+  // Run discovery in rounds
+  let roundNum = 0;
+  while (totalSearchCount < MAX_DISCOVERY_SEARCHES) {
+    roundNum++;
+    let roundSearchCount = 0;
+
+    const messages: Anthropic.MessageParam[] = [
+      {
+        role: "user",
+        content: buildDiscoveryRoundMessage(
+          procedure,
+          geography,
+          allCandidates,
+          totalSearchCount,
+          MAX_DISCOVERY_SEARCHES,
+        ),
+      },
+    ];
+
+    auditEntries.push(auditEntry("discovery", "round_start", { round: roundNum }));
+
+    // Agentic tool-use loop for this round
+    let response = await client.messages.create({
+      model: LLM_MODEL,
+      max_tokens: 16000,
+      system: DISCOVERY_SYSTEM_PROMPT,
+      tools: [WEB_SEARCH_TOOL],
+      messages,
+    });
+
+    tokensIn += response.usage.input_tokens;
+    tokensOut += response.usage.output_tokens;
+
+    while (response.stop_reason === "tool_use") {
+      const assistantContent = response.content;
+      messages.push({ role: "assistant", content: assistantContent });
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+      for (const block of assistantContent) {
+        if (block.type === "tool_use" && block.name === "web_search") {
+          const query = (block.input as { query: string }).query;
+          roundSearchCount++;
+          totalSearchCount++;
+
+          sendProgress({
+            type: "progress",
+            phase: "discovery",
+            message: `Search ${totalSearchCount}: "${query.slice(0, 80)}${query.length > 80 ? "..." : ""}"`,
+          });
+
+          try {
+            const results = await webSearch(query, searchKey);
+            auditEntries.push(auditEntry("discovery", "web_search", {
+              round: roundNum,
+              query,
+              result_count: results.length,
+            }));
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: formatSearchResults(results),
+            });
+          } catch (err) {
+            auditEntries.push(auditEntry("discovery", "web_search_error", {
+              round: roundNum,
+              query,
+              error: err instanceof Error ? err.message : "unknown",
+            }));
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: `Search error: ${err instanceof Error ? err.message : "Unknown error"}`,
+              is_error: true,
+            });
+          }
+        }
+      }
+
+      messages.push({ role: "user", content: toolResults });
+
+      // If we've hit the per-round cap, make a final call WITHOUT tools to force JSON output
+      if (roundSearchCount >= DISCOVERY_BATCH_SIZE) {
+        response = await client.messages.create({
+          model: LLM_MODEL,
+          max_tokens: 16000,
+          system: DISCOVERY_SYSTEM_PROMPT,
+          messages,
+        });
+      } else {
+        response = await client.messages.create({
+          model: LLM_MODEL,
+          max_tokens: 16000,
+          system: DISCOVERY_SYSTEM_PROMPT,
+          tools: [WEB_SEARCH_TOOL],
+          messages,
+        });
+      }
+
+      tokensIn += response.usage.input_tokens;
+      tokensOut += response.usage.output_tokens;
+    }
+
+    // Parse the round's output
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+
+    let roundOutput: DiscoveryRoundOutput;
+    try {
+      roundOutput = parseJSON<DiscoveryRoundOutput>(text, "candidates");
+    } catch {
+      // If we can't parse, treat as zero new candidates
+      auditEntries.push(auditEntry("discovery", "parse_error", {
+        round: roundNum,
+        text_preview: text.slice(0, 300),
+      }));
+      break;
+    }
+
+    const newCandidates = roundOutput.candidates ?? [];
+    allCandidates.push(...newCandidates);
+
+    auditEntries.push(auditEntry("discovery", "round_end", {
+      round: roundNum,
+      new_candidates: newCandidates.length,
+      total_candidates: allCandidates.length,
+      searches_this_round: roundSearchCount,
+      exhausted: roundOutput.exhausted,
+    }));
+
+    // Stream current name list to frontend
+    sendProgress({
+      type: "progress",
+      phase: "discovery",
+      message: `Round ${roundNum} complete — ${allCandidates.length} candidates found so far`,
+    });
+
+    sendProgress({
+      type: "candidates_discovered",
+      names: allCandidates.map((c) => c.name),
+    });
+
+    // Stop conditions
+    if (roundOutput.exhausted) break;
+    if (newCandidates.length === 0) break;
+    if (totalSearchCount >= MAX_DISCOVERY_SEARCHES) break;
+  }
+
+  auditEntries.push(auditEntry("discovery", "phase_end", {
+    total_candidates: allCandidates.length,
+    total_searches: totalSearchCount,
+    rounds: roundNum,
+  }));
+
+  return {
+    candidates: allCandidates,
+    searchCount: totalSearchCount,
+    durationMs: Date.now() - start,
+    tokensIn,
+    tokensOut,
+    auditEntries,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Filtering
+// ---------------------------------------------------------------------------
+
+interface FilteringResult {
+  surviving: FilteredCandidate[];
+  rejected: Array<{ name: string; rejectionReason: string }>;
+  searchCount: number;
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  auditEntries: AuditEntry[];
+}
+
+async function runFilteringPhase(
+  client: Anthropic,
+  candidates: DiscoveryCandidate[],
+  procedure: string,
+  searchKey: string,
+  sendProgress: (event: SSEEvent) => void,
+): Promise<FilteringResult> {
+  let searchCount = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
+  const auditEntries: AuditEntry[] = [];
+  const start = Date.now();
+
+  auditEntries.push(auditEntry("filtering", "phase_start", {
+    candidates_to_filter: candidates.length,
+  }));
+
+  // Step 1: Direct web search per candidate
+  const searchResults: Record<string, string> = {};
+
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const query = `"${c.name}" ${procedure}`;
+
+    sendProgress({
+      type: "progress",
+      phase: "filtering",
+      message: `Searching ${c.name}...`,
+      current: i + 1,
+      total: candidates.length,
+    });
+
+    try {
+      const results = await webSearch(query, searchKey);
+      searchCount++;
+      searchResults[c.name] = formatSearchResults(results);
+      auditEntries.push(auditEntry("filtering", "web_search", {
+        candidate: c.name,
+        query,
+        result_count: results.length,
+      }));
+    } catch (err) {
+      searchResults[c.name] = "Search failed.";
+      auditEntries.push(auditEntry("filtering", "web_search_error", {
+        candidate: c.name,
+        query,
+        error: err instanceof Error ? err.message : "unknown",
+      }));
+    }
+  }
+
+  // Step 2: Batched LLM evaluation
+  const allSurviving: FilteredCandidate[] = [];
+  const allRejected: Array<{ name: string; rejectionReason: string }> = [];
+
+  for (let i = 0; i < candidates.length; i += FILTERING_BATCH_SIZE) {
+    const batch = candidates.slice(i, i + FILTERING_BATCH_SIZE);
+    const batchResults: Record<string, string> = {};
+    for (const c of batch) {
+      batchResults[c.name] = searchResults[c.name] ?? "No search results.";
+    }
+
+    sendProgress({
+      type: "progress",
+      phase: "filtering",
+      message: `Evaluating batch ${Math.floor(i / FILTERING_BATCH_SIZE) + 1}...`,
+    });
+
+    try {
+      const response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: FILTERING_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: buildFilteringMessage(batch, batchResults, procedure),
+          },
+        ],
+      });
+
+      tokensIn += response.usage.input_tokens;
+      tokensOut += response.usage.output_tokens;
+
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+
+      const parsed = parseJSON<{
+        surviving: FilteredCandidate[];
+        rejected: Array<{ name: string; rejectionReason: string }>;
+      }>(text, "filtered");
+
+      allSurviving.push(...(parsed.surviving ?? []));
+      allRejected.push(...(parsed.rejected ?? []));
+
+      auditEntries.push(auditEntry("filtering", "batch_eval", {
+        batch_start: i,
+        batch_size: batch.length,
+        surviving: parsed.surviving?.length ?? 0,
+        rejected: parsed.rejected?.length ?? 0,
+      }));
+    } catch (err) {
+      // On batch failure, keep all candidates in batch as surviving
+      auditEntries.push(auditEntry("filtering", "batch_eval_error", {
+        batch_start: i,
+        error: err instanceof Error ? err.message : "unknown",
+      }));
+      allSurviving.push(...batch);
+    }
+  }
+
+  // Step 3: Cross-batch dedup (only if we had multiple batches)
+  let finalSurviving = allSurviving;
+  let finalRejected = allRejected;
+
+  if (candidates.length > FILTERING_BATCH_SIZE && allSurviving.length > 0) {
+    sendProgress({
+      type: "progress",
+      phase: "filtering",
+      message: "Cross-batch deduplication...",
+    });
+
+    try {
+      const response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: CROSS_BATCH_DEDUP_SYSTEM_PROMPT,
+        messages: [
+          { role: "user", content: buildCrossBatchDedupMessage(allSurviving) },
+        ],
+      });
+
+      tokensIn += response.usage.input_tokens;
+      tokensOut += response.usage.output_tokens;
+
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+
+      const parsed = parseJSON<{
+        surviving: FilteredCandidate[];
+        rejected: Array<{ name: string; rejectionReason: string }>;
+      }>(text, "deduped");
+
+      finalSurviving = parsed.surviving ?? allSurviving;
+      finalRejected = [...allRejected, ...(parsed.rejected ?? [])];
+
+      auditEntries.push(auditEntry("filtering", "cross_batch_dedup", {
+        before: allSurviving.length,
+        after: finalSurviving.length,
+        new_rejects: parsed.rejected?.length ?? 0,
+      }));
+    } catch (err) {
+      auditEntries.push(auditEntry("filtering", "cross_batch_dedup_error", {
+        error: err instanceof Error ? err.message : "unknown",
+      }));
+      // Keep allSurviving as-is on failure
+    }
+  }
+
+  auditEntries.push(auditEntry("filtering", "phase_end", {
+    surviving: finalSurviving.length,
+    rejected: finalRejected.length,
+  }));
+
+  // Stream the filtered name list
+  sendProgress({
+    type: "candidates_filtered",
+    names: finalSurviving.map((c) => c.name),
+  });
+
+  sendProgress({
+    type: "progress",
+    phase: "filtering",
+    message: `Filtering complete — ${finalSurviving.length} candidates surviving, ${finalRejected.length} rejected`,
+  });
+
+  return {
+    surviving: finalSurviving,
+    rejected: finalRejected,
+    searchCount,
+    durationMs: Date.now() - start,
+    tokensIn,
+    tokensOut,
+    auditEntries,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Research
+// ---------------------------------------------------------------------------
+
+interface ResearchResult {
+  researched: ResearchedCandidate[];
+  searchCount: number;
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  failureCount: number;
+  auditEntries: AuditEntry[];
+}
+
+async function runResearchAgent(
+  client: Anthropic,
+  procedure: string,
+  candidate: FilteredCandidate,
+  searchKey: string,
+  maxSearches: number,
+): Promise<{ result: ResearchedCandidate; searchCount: number; tokensIn: number; tokensOut: number }> {
+  let searchCount = 0;
+  let tokensIn = 0;
+  let tokensOut = 0;
+
   const messages: Anthropic.MessageParam[] = [
-    { role: "user", content: buildDiscoveryMessage(procedure, geography) },
+    { role: "user", content: buildResearchMessage(procedure, candidate.name, candidate.notes) },
   ];
 
   let response = await client.messages.create({
     model: LLM_MODEL,
-    max_tokens: 16000,
-    system: SYSTEM_PROMPT,
+    max_tokens: 8000,
+    system: RESEARCH_SYSTEM_PROMPT,
     tools: [WEB_SEARCH_TOOL],
     messages,
   });
 
   tokensIn += response.usage.input_tokens;
   tokensOut += response.usage.output_tokens;
-  auditEntries.push(auditEntry("discovery", "llm_call", {
-    tokens_in: response.usage.input_tokens,
-    tokens_out: response.usage.output_tokens,
-  }));
 
   while (response.stop_reason === "tool_use") {
     const assistantContent = response.content;
@@ -156,28 +557,15 @@ async function runDiscoveryPhase(
       if (block.type === "tool_use" && block.name === "web_search") {
         const query = (block.input as { query: string }).query;
         searchCount++;
-        sendProgress({
-          type: "progress",
-          phase: "discovery",
-          message: `Search ${searchCount}: "${query.slice(0, 80)}${query.length > 80 ? "..." : ""}"`,
-        });
 
         try {
           const results = await webSearch(query, searchKey);
-          auditEntries.push(auditEntry("discovery", "web_search", {
-            query,
-            result_count: results.length,
-          }));
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
             content: formatSearchResults(results),
           });
         } catch (err) {
-          auditEntries.push(auditEntry("discovery", "web_search_error", {
-            query,
-            error: err instanceof Error ? err.message : "unknown",
-          }));
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
@@ -190,20 +578,26 @@ async function runDiscoveryPhase(
 
     messages.push({ role: "user", content: toolResults });
 
-    response = await client.messages.create({
-      model: LLM_MODEL,
-      max_tokens: 16000,
-      system: SYSTEM_PROMPT,
-      tools: [WEB_SEARCH_TOOL],
-      messages,
-    });
+    // If we've hit the per-candidate search cap, force text output
+    if (searchCount >= maxSearches) {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 8000,
+        system: RESEARCH_SYSTEM_PROMPT,
+        messages,
+      });
+    } else {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 8000,
+        system: RESEARCH_SYSTEM_PROMPT,
+        tools: [WEB_SEARCH_TOOL],
+        messages,
+      });
+    }
 
     tokensIn += response.usage.input_tokens;
     tokensOut += response.usage.output_tokens;
-    auditEntries.push(auditEntry("discovery", "llm_call", {
-      tokens_in: response.usage.input_tokens,
-      tokens_out: response.usage.output_tokens,
-    }));
   }
 
   const text = response.content
@@ -211,170 +605,238 @@ async function runDiscoveryPhase(
     .map((b) => b.text)
     .join("\n");
 
-  const candidates = parseCandidatesFromResponse(text);
+  const result = parseJSON<ResearchedCandidate>(text, "research");
 
-  auditEntries.push(auditEntry("discovery", "phase_end", {
-    candidates_found: candidates.length,
+  return { result, searchCount, tokensIn, tokensOut };
+}
+
+function makeDegradedResearchResult(candidate: FilteredCandidate): ResearchedCandidate {
+  return {
+    name: candidate.name,
+    summary: "Research unavailable — insufficient data to evaluate.",
+    evidence: "",
+    score: 0,
+    institution: "Unknown",
+    city: "Unknown",
+    specialty: "Unknown",
+    source: "Unknown",
+    profileLink: null,
+    disqualified: false,
+  };
+}
+
+async function runResearchPhase(
+  client: Anthropic,
+  candidates: FilteredCandidate[],
+  procedure: string,
+  searchKey: string,
+  sendProgress: (event: SSEEvent) => void,
+): Promise<ResearchResult> {
+  const auditEntries: AuditEntry[] = [];
+  const start = Date.now();
+  let totalSearchCount = 0;
+  let totalTokensIn = 0;
+  let totalTokensOut = 0;
+  let completedCount = 0;
+  let failureCount = 0;
+
+  auditEntries.push(auditEntry("research", "phase_start", {
+    candidates_to_research: candidates.length,
   }));
 
   sendProgress({
     type: "progress",
-    phase: "discovery",
-    message: `Found ${candidates.length} candidates. Starting verification...`,
+    phase: "research",
+    message: `Researching ${candidates.length} candidates...`,
+    current: 0,
+    total: candidates.length,
   });
 
-  return { candidates, searchCount, durationMs: Date.now() - start, tokensIn, tokensOut, auditEntries };
-}
+  const limit = pLimit(10);
 
-interface VettingResult {
-  vettingResults: Record<string, string>;
-  searchCount: number;
-  durationMs: number;
-  auditEntries: AuditEntry[];
-}
+  const promises = candidates.map((candidate) =>
+    limit(async () => {
+      try {
+        const agentResult = await runResearchAgent(
+          client,
+          procedure,
+          candidate,
+          searchKey,
+          MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
+        );
 
-async function runVettingPhase(
-  candidates: Candidate[],
-  procedure: string,
-  searchKey: string,
-  sendProgress: (event: SSEEvent) => void
-): Promise<VettingResult> {
-  const vettingResults: Record<string, string> = {};
-  let searchCount = 0;
-  const auditEntries: AuditEntry[] = [];
-  const start = Date.now();
+        totalSearchCount += agentResult.searchCount;
+        totalTokensIn += agentResult.tokensIn;
+        totalTokensOut += agentResult.tokensOut;
+        completedCount++;
 
-  auditEntries.push(auditEntry("vetting", "phase_start", {
-    candidates_to_vet: candidates.length,
-  }));
+        auditEntries.push(auditEntry("research", "agent_complete", {
+          candidate: candidate.name,
+          score: agentResult.result.score,
+          searches: agentResult.searchCount,
+          disqualified: agentResult.result.disqualified,
+        }));
 
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    const query = `"${c.name}" "${c.institution}" ${procedure}`;
+        sendProgress({
+          type: "progress",
+          phase: "research",
+          message: `Researched ${candidate.name} (score: ${agentResult.result.score})`,
+          current: completedCount + failureCount,
+          total: candidates.length,
+        });
 
+        return agentResult.result;
+      } catch (err) {
+        failureCount++;
+
+        auditEntries.push(auditEntry("research", "agent_error", {
+          candidate: candidate.name,
+          error: err instanceof Error ? err.message : "unknown",
+        }));
+
+        sendProgress({
+          type: "progress",
+          phase: "research",
+          message: `Research failed for ${candidate.name}`,
+          current: completedCount + failureCount,
+          total: candidates.length,
+        });
+
+        return makeDegradedResearchResult(candidate);
+      }
+    }),
+  );
+
+  const results = await Promise.all(promises);
+
+  // Warn if >20% failure rate
+  if (failureCount > 0 && failureCount / candidates.length > 0.2) {
     sendProgress({
       type: "progress",
-      phase: "vetting",
-      message: `Vetting ${c.name}...`,
-      current: i + 1,
-      total: candidates.length,
+      phase: "research",
+      message: `Warning: ${failureCount} of ${candidates.length} research agents failed (${Math.round(failureCount / candidates.length * 100)}%)`,
     });
+  }
 
-    try {
-      const results = await webSearch(query, searchKey);
-      searchCount++;
-      vettingResults[c.name] = formatSearchResults(results);
-      auditEntries.push(auditEntry("vetting", "web_search", {
-        candidate: c.name,
-        query,
-        result_count: results.length,
-      }));
-    } catch (err) {
-      vettingResults[c.name] = "Verification search failed.";
-      auditEntries.push(auditEntry("vetting", "web_search_error", {
-        candidate: c.name,
-        query,
-        error: err instanceof Error ? err.message : "unknown",
-      }));
+  auditEntries.push(auditEntry("research", "phase_end", {
+    total_researched: results.length,
+    failures: failureCount,
+    total_searches: totalSearchCount,
+  }));
+
+  return {
+    researched: results,
+    searchCount: totalSearchCount,
+    durationMs: Date.now() - start,
+    tokensIn: totalTokensIn,
+    tokensOut: totalTokensOut,
+    failureCount,
+    auditEntries,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Score (mechanical — no LLM)
+// ---------------------------------------------------------------------------
+
+function runScorePhase(
+  researched: ResearchedCandidate[],
+  filteringRejected: Array<{ name: string; rejectionReason: string }>,
+): Candidate[] {
+  const allCandidates: Candidate[] = [];
+
+  // Process researched candidates
+  for (const r of researched) {
+    if (r.disqualified) {
+      allCandidates.push({
+        rank: 0,
+        name: r.name,
+        summary: r.summary,
+        institution: r.institution,
+        city: r.city,
+        specialty: r.specialty,
+        evidence: r.evidence,
+        source: r.source,
+        profileLink: r.profileLink,
+        score: r.score,
+        status: "rejected",
+        rejectionReason: r.disqualificationReason ?? "Disqualified during research",
+        rejectionStage: "research",
+      });
+    } else if (r.score === 0 && r.summary.startsWith("Research unavailable")) {
+      allCandidates.push({
+        rank: 0,
+        name: r.name,
+        summary: r.summary,
+        institution: r.institution,
+        city: r.city,
+        specialty: r.specialty,
+        evidence: r.evidence,
+        source: r.source,
+        profileLink: r.profileLink,
+        score: r.score,
+        status: "rejected",
+        rejectionReason: "Research incomplete — insufficient data to evaluate",
+        rejectionStage: "research",
+      });
+    } else {
+      allCandidates.push({
+        rank: 0, // assigned below
+        name: r.name,
+        summary: r.summary,
+        institution: r.institution,
+        city: r.city,
+        specialty: r.specialty,
+        evidence: r.evidence,
+        source: r.source,
+        profileLink: r.profileLink,
+        score: r.score,
+        status: "accepted", // may be changed to rejected below
+      });
     }
   }
 
-  auditEntries.push(auditEntry("vetting", "phase_end"));
+  // Add filtering-rejected candidates
+  for (const r of filteringRejected) {
+    allCandidates.push({
+      rank: 0,
+      name: r.name,
+      summary: "",
+      institution: "Unknown",
+      city: "Unknown",
+      specialty: "Unknown",
+      evidence: "",
+      source: "",
+      profileLink: null,
+      score: 0,
+      status: "rejected",
+      rejectionReason: r.rejectionReason,
+      rejectionStage: "filtering",
+    });
+  }
 
-  return { vettingResults, searchCount, durationMs: Date.now() - start, auditEntries };
-}
+  // Sort non-rejected by score descending, assign ranks, apply acceptance cutoff
+  const rankable = allCandidates.filter(
+    (c) => c.status === "accepted",
+  );
+  rankable.sort((a, b) => b.score - a.score);
 
-interface ScoringResult {
-  scored: Candidate[];
-  durationMs: number;
-  tokensIn: number;
-  tokensOut: number;
-  auditEntries: AuditEntry[];
-}
-
-async function runScoringPhase(
-  client: Anthropic,
-  candidates: Candidate[],
-  vettingResults: Record<string, string>,
-  sendProgress: (event: SSEEvent) => void
-): Promise<ScoringResult> {
-  const auditEntries: AuditEntry[] = [];
-  const start = Date.now();
-
-  auditEntries.push(auditEntry("scoring", "phase_start", {
-    candidates_to_score: candidates.length,
-  }));
-
-  const totalCandidates = candidates.length;
-
-  sendProgress({
-    type: "progress",
-    phase: "scoring",
-    message: "Scoring and ranking candidates...",
-    current: 0,
-    total: totalCandidates,
-  });
-
-  let accumulatedText = "";
-  let scoredCount = 0;
-
-  const stream = client.messages.stream({
-    model: LLM_MODEL,
-    max_tokens: 16000,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: buildScoringMessage(candidates, vettingResults),
-      },
-    ],
-  });
-
-  stream.on("text", (delta) => {
-    accumulatedText += delta;
-    const newCount = (accumulatedText.match(/"status"\s*:/g) || []).length;
-    if (newCount > scoredCount) {
-      scoredCount = newCount;
-      const nameMatches = accumulatedText.match(/"name"\s*:\s*"([^"]*)"/g);
-      const last = nameMatches?.[nameMatches.length - 1]?.match(/"name"\s*:\s*"([^"]*)"/);
-      const name = last?.[1] ?? "candidate";
-      sendProgress({
-        type: "progress",
-        phase: "scoring",
-        message: `Scored ${name}`,
-        current: scoredCount,
-        total: totalCandidates,
-      });
+  rankable.forEach((c, i) => {
+    c.rank = i + 1;
+    if (i >= MAX_ACCEPTED_RESULTS) {
+      c.status = "rejected";
+      c.rejectionReason = "Below acceptance threshold";
+      c.rejectionStage = "score";
     }
   });
 
-  const finalMessage = await stream.finalMessage();
-
-  const tokensIn = finalMessage.usage.input_tokens;
-  const tokensOut = finalMessage.usage.output_tokens;
-  auditEntries.push(auditEntry("scoring", "llm_call", {
-    tokens_in: tokensIn,
-    tokens_out: tokensOut,
-  }));
-
-  const text = finalMessage.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-
-  const scored = parseCandidatesFromResponse(text);
-
-  // Deterministic sort: confidence descending, then reassign ranks
-  scored.sort((a, b) => b.confidence - a.confidence);
-  scored.forEach((c, i) => { c.rank = i + 1; });
-
-  auditEntries.push(auditEntry("scoring", "phase_end", {
-    accepted: scored.filter((c) => c.status === "accepted").length,
-    rejected: scored.filter((c) => c.status === "rejected").length,
-  }));
-
-  return { scored, durationMs: Date.now() - start, tokensIn, tokensOut, auditEntries };
+  // Rejected candidates get rank 0 (unranked)
+  return allCandidates;
 }
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
 
 interface SearchRequestBody {
   procedure: string;
@@ -383,7 +845,6 @@ interface SearchRequestBody {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  // Auth check uses the user's JWT
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -397,7 +858,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!anthropicKey || !braveSearchKey) {
     return Response.json(
       { error: "Server API keys not configured" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -413,17 +874,15 @@ export async function POST(req: Request): Promise<Response> {
   if (!procedure) {
     return Response.json(
       { error: "Missing required field: procedure" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   const geography = formatGeography(region, countries);
   const totalStart = Date.now();
 
-  // Service role client for all DB writes (bypasses RLS)
   const serviceClient = createServiceClient();
 
-  // Insert the initial "running" row
   const { data: searchRow, error: insertError } = await serviceClient
     .from("searches")
     .insert({
@@ -452,11 +911,11 @@ export async function POST(req: Request): Promise<Response> {
       let totalTokensOut = 0;
 
       try {
-        const client = new Anthropic({ apiKey: anthropicKey });
+        const anthropic = new Anthropic({ apiKey: anthropicKey });
 
         // Phase 1: Discovery
         const discovery = await runDiscoveryPhase(
-          client, procedure, geography, braveSearchKey, send
+          anthropic, procedure, geography, braveSearchKey, send,
         );
         allAuditEntries.push(...discovery.auditEntries);
         totalTokensIn += discovery.tokensIn;
@@ -488,60 +947,108 @@ export async function POST(req: Request): Promise<Response> {
           return;
         }
 
-        // Phase 2: Vetting
-        const vetting = await runVettingPhase(
-          discovery.candidates, procedure, braveSearchKey, send
+        // Phase 2: Filtering
+        const filtering = await runFilteringPhase(
+          anthropic, discovery.candidates, procedure, braveSearchKey, send,
         );
-        allAuditEntries.push(...vetting.auditEntries);
+        allAuditEntries.push(...filtering.auditEntries);
+        totalTokensIn += filtering.tokensIn;
+        totalTokensOut += filtering.tokensOut;
 
-        // Phase 3: Scoring
-        const scoring = await runScoringPhase(
-          client, discovery.candidates, vetting.vettingResults, send
+        if (filtering.surviving.length === 0) {
+          // All candidates filtered out — still produce results with all rejected
+          const scoredCandidates = runScorePhase([], filtering.rejected);
+          const totalMs = Date.now() - totalStart;
+
+          const responseData: SearchResponse = {
+            candidates: scoredCandidates,
+            metadata: {
+              procedure,
+              geography,
+              searchCountDiscovery: discovery.searchCount,
+              searchCountFiltering: filtering.searchCount,
+              searchCountResearch: 0,
+              timestamp: new Date().toISOString(),
+            },
+          };
+
+          if (searchId) {
+            await serviceClient
+              .from("searches")
+              .update({
+                status: "completed",
+                result_count: scoredCandidates.length,
+                results_json: scoredCandidates,
+                search_count_discovery: discovery.searchCount,
+                search_count_filtering: filtering.searchCount,
+                search_count_research: 0,
+                tokens_in: totalTokensIn,
+                tokens_out: totalTokensOut,
+                duration_total_s: totalMs / 1000,
+                duration_discovery_s: discovery.durationMs / 1000,
+                duration_filtering_s: filtering.durationMs / 1000,
+                duration_research_s: 0,
+                audit_log: allAuditEntries,
+              })
+              .eq("id", searchId);
+          }
+
+          send({ type: "result", data: responseData, searchId });
+          send({ type: "done" });
+          controller.close();
+          return;
+        }
+
+        // Phase 3: Research
+        const research = await runResearchPhase(
+          anthropic, filtering.surviving, procedure, braveSearchKey, send,
         );
-        allAuditEntries.push(...scoring.auditEntries);
-        totalTokensIn += scoring.tokensIn;
-        totalTokensOut += scoring.tokensOut;
+        allAuditEntries.push(...research.auditEntries);
+        totalTokensIn += research.tokensIn;
+        totalTokensOut += research.tokensOut;
+
+        // Phase 4: Score
+        const scoredCandidates = runScorePhase(
+          research.researched,
+          filtering.rejected,
+        );
 
         const totalMs = Date.now() - totalStart;
 
         const responseData: SearchResponse = {
-          candidates: scoring.scored,
+          candidates: scoredCandidates,
           metadata: {
             procedure,
             geography,
             searchCountDiscovery: discovery.searchCount,
-            searchCountVetting: vetting.searchCount,
+            searchCountFiltering: filtering.searchCount,
+            searchCountResearch: research.searchCount,
             timestamp: new Date().toISOString(),
           },
         };
 
-        // Update the search row to completed
         if (searchId) {
           await serviceClient
             .from("searches")
             .update({
               status: "completed",
-              result_count: scoring.scored.length,
-              results_json: scoring.scored,
+              result_count: scoredCandidates.length,
+              results_json: scoredCandidates,
               search_count_discovery: discovery.searchCount,
-              search_count_vetting: vetting.searchCount,
+              search_count_filtering: filtering.searchCount,
+              search_count_research: research.searchCount,
               tokens_in: totalTokensIn,
               tokens_out: totalTokensOut,
               duration_total_s: totalMs / 1000,
               duration_discovery_s: discovery.durationMs / 1000,
-              duration_vetting_s: vetting.durationMs / 1000,
-              duration_scoring_s: scoring.durationMs / 1000,
+              duration_filtering_s: filtering.durationMs / 1000,
+              duration_research_s: research.durationMs / 1000,
               audit_log: allAuditEntries,
             })
             .eq("id", searchId);
         }
 
-        send({
-          type: "result",
-          data: responseData,
-          searchId,
-        });
-
+        send({ type: "result", data: responseData, searchId });
         send({ type: "done" });
       } catch (err) {
         if (searchId) {

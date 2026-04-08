@@ -17,7 +17,8 @@ dr-yellowpages/
 │
 ├── supabase/
 │   └── migrations/
-│       └── 001_schema.sql                — Creates profiles, searches, and unlocks tables with RLS policies
+│       ├── 001_schema.sql                — Creates profiles, searches, and unlocks tables with RLS policies
+│       └── 002_pipeline_revamp.sql       — Renames vetting→filtering columns, adds research columns (shared with pipeline-accuracy-revamp.md)
 │
 ├── public/
 │   ├── file.svg                          — Default Next.js SVG assets (unused by app)
@@ -33,10 +34,10 @@ dr-yellowpages/
     │   └── countries.json                — 6 regions + 195+ countries with ISO alpha-3 codes. Shape: { regions: Record<key, {name, description}>, countries: [{alpha3, name, region}] }
     │
     ├── lib/
-    │   ├── types.ts                      — TypeScript interfaces: Candidate, SearchRequest, SearchResponse, WebSearchResult, Region, Country, CountriesData, SSEEvent
-    │   ├── constants.ts                  — App-wide variables: unlock price, visible free result count, candidate pool cap, accepted results cap, minimum password length
-    │   ├── prompts.ts                    — LLM system prompt, discovery/scoring message builders, web_search tool definition
-    │   ├── use-search.ts                 — Client hook: search state machine (idle/searching/results/error), SSE stream parser, CSV export
+    │   ├── types.ts                      — TypeScript interfaces: Candidate, SearchRequest, SearchResponse, WebSearchResult, Region, Country, CountriesData, SSEEvent (shared with pipeline-accuracy-revamp.md)
+    │   ├── constants.ts                  — App-wide variables: unlock price, visible free result count, pipeline caps, minimum password length (shared with pipeline-accuracy-revamp.md)
+    │   ├── prompts.ts                    — LLM system prompts and message builders for all pipeline phases (shared with pipeline-accuracy-revamp.md)
+    │   ├── use-search.ts                 — Client hook: search state machine with progressive streaming, SSE parser, CSV export (shared with pipeline-accuracy-revamp.md)
     │   ├── web-search.ts                 — Web search provider: calls configured search API, returns normalized WebSearchResult[]; also formatSearchResults for LLM
     │   ├── countries.ts                  — Geography utilities: getRegions, getCountries, getCountriesByRegion, formatGeography
     │   ├── stripe.ts                     — Stripe client singleton, lazily initialized from env secret key
@@ -48,11 +49,11 @@ dr-yellowpages/
     │       └── proxy.ts                  — Auth middleware: refreshes sessions, redirects unauthed→/login, authed→away from auth pages
     │
     ├── components/
-    │   ├── dr-yellowpages-app.tsx              — Client root: orchestrates search state, conditionally renders SearchForm/SearchProgress/ResultsTable/error
+    │   ├── dr-yellowpages-app.tsx              — Client root: orchestrates search state, progressive name list + final results reveal (shared with pipeline-accuracy-revamp.md)
     │   ├── nav-header.tsx                — Header bar: Dr. YellowPages branding, user email, History link, logout button
     │   ├── search-form.tsx               — Search input: procedure name, region/country filter
-    │   ├── search-progress.tsx           — Progress display: current phase, progress bar, status messages during search
-    │   ├── results-table.tsx             — Results: accepted candidate cards, collapsed rejected section, confidence badges, CSV download, unlock overlay
+    │   ├── search-progress.tsx           — Progress display: phase labels, live name list, progress bar (shared with pipeline-accuracy-revamp.md)
+    │   ├── results-table.tsx             — Results: accepted candidate cards, collapsed rejected section, score badges, CSV download, unlock overlay (shared with pipeline-accuracy-revamp.md)
     │   └── ui/                           — shadcn/ui primitives (copied in, not npm deps)
     │       ├── badge.tsx
     │       ├── button.tsx
@@ -83,7 +84,7 @@ dr-yellowpages/
         │       └── page.tsx              — Search detail: full results for a specific search, candidate cards, unlock CTA
         └── api/
             ├── search/
-            │   └── route.ts              — POST: three-phase search pipeline (discovery/vetting/scoring), SSE streaming, stores in Supabase. Max 300s
+            │   └── route.ts              — POST: four-phase search pipeline (discovery/filtering/research/score), SSE streaming, stores in Supabase (shared with pipeline-accuracy-revamp.md)
             ├── billing/
             │   └── checkout/
             │       └── route.ts          — POST: creates Stripe checkout session for unlock, validates ownership, prevents duplicates

@@ -25,10 +25,19 @@ interface ResultsTableProps {
   unlocked?: boolean;
 }
 
-function confidenceColor(score: number): string {
+function scoreColor(score: number): string {
   if (score >= 70) return "bg-green-100 text-green-800 border-green-300";
   if (score >= 40) return "bg-yellow-100 text-yellow-800 border-yellow-300";
   return "bg-red-100 text-red-800 border-red-300";
+}
+
+function stageLabel(stage?: string): string {
+  switch (stage) {
+    case "filtering": return "Filtered";
+    case "research": return "Research";
+    case "score": return "Ranking";
+    default: return "Rejected";
+  }
 }
 
 function CandidateCard({
@@ -58,9 +67,11 @@ function CandidateCard({
         <div className={`flex-1 min-w-0 ${blurred ? "blur-sm pointer-events-none" : ""}`}>
           {/* Rank + Name + Status */}
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">
-              #{candidate.rank}
-            </span>
+            {candidate.rank > 0 && (
+              <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">
+                #{candidate.rank}
+              </span>
+            )}
             {isRejected ? (
               <XCircle className="h-4 w-4 text-red-500 shrink-0" />
             ) : (
@@ -92,7 +103,7 @@ function CandidateCard({
                   : "bg-green-100 text-green-700 border-green-300"
               }`}
             >
-              {isRejected ? "Rejected" : "Accepted"}
+              {isRejected ? stageLabel(candidate.rejectionStage) : "Accepted"}
             </Badge>
           </div>
 
@@ -103,34 +114,50 @@ function CandidateCard({
             </p>
           )}
 
-          {/* Notes */}
-          <p className="text-sm text-foreground/80 ml-8 mb-2">
-            {candidate.notes}
-          </p>
+          {/* Summary */}
+          {candidate.summary && (
+            <p className="text-sm text-foreground/80 ml-8 mb-2">
+              {candidate.summary}
+            </p>
+          )}
 
           {/* Key info row */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 ml-8 text-sm text-muted-foreground">
-            <span>{candidate.institution}</span>
-            <span>&middot;</span>
-            <span>{candidate.city}</span>
-            <span>&middot;</span>
-            <span>{candidate.specialty}</span>
-          </div>
+          {candidate.institution && candidate.institution !== "Unknown" && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 ml-8 text-sm text-muted-foreground">
+              <span>{candidate.institution}</span>
+              {candidate.city && candidate.city !== "Unknown" && (
+                <>
+                  <span>&middot;</span>
+                  <span>{candidate.city}</span>
+                </>
+              )}
+              {candidate.specialty && candidate.specialty !== "Unknown" && (
+                <>
+                  <span>&middot;</span>
+                  <span>{candidate.specialty}</span>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Source */}
-          <div className="ml-8 mt-1 text-xs text-muted-foreground">
-            <span className="font-medium">Source:</span> {candidate.source}
-          </div>
+          {candidate.source && (
+            <div className="ml-8 mt-1 text-xs text-muted-foreground">
+              <span className="font-medium">Source:</span> {candidate.source}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-2 shrink-0">
-          <Badge
-            variant="outline"
-            className={`font-mono text-xs ${blurred ? "blur-sm" : confidenceColor(candidate.confidence)}`}
-          >
-            {candidate.confidence}
-          </Badge>
-          {!blurred && (
+          {candidate.score > 0 && (
+            <Badge
+              variant="outline"
+              className={`font-mono text-xs ${blurred ? "blur-sm" : scoreColor(candidate.score)}`}
+            >
+              {candidate.score}
+            </Badge>
+          )}
+          {!blurred && candidate.summary && (
             <Button variant="ghost" size="sm" onClick={onToggle}>
               {expanded ? (
                 <ChevronUp className="h-4 w-4" />
@@ -145,14 +172,18 @@ function CandidateCard({
       {!blurred && expanded && (
         <div className="mt-3 ml-8 space-y-2 text-sm">
           <Separator />
-          <div>
-            <span className="font-medium text-muted-foreground">Evidence: </span>
-            <span>{candidate.evidence}</span>
-          </div>
-          <div>
-            <span className="font-medium text-muted-foreground">Source: </span>
-            <span>{candidate.source}</span>
-          </div>
+          {candidate.evidence && (
+            <div>
+              <span className="font-medium text-muted-foreground">Evidence: </span>
+              <span>{candidate.evidence}</span>
+            </div>
+          )}
+          {candidate.source && (
+            <div>
+              <span className="font-medium text-muted-foreground">Source: </span>
+              <span>{candidate.source}</span>
+            </div>
+          )}
           {candidate.profileLink && (
             <div>
               <span className="font-medium text-muted-foreground">
@@ -259,7 +290,8 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
             )}
             <span>
               Searches: {data.metadata.searchCountDiscovery} discovery +{" "}
-              {data.metadata.searchCountVetting} vetting
+              {data.metadata.searchCountFiltering} filtering +{" "}
+              {data.metadata.searchCountResearch} research
             </span>
             <span>
               Total candidates: {data.candidates.length} ({accepted.length}{" "}
@@ -341,9 +373,9 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
           </CardHeader>
           {showRejected && (
             <CardContent className="space-y-3">
-              {rejected.map((c) => (
+              {rejected.map((c, i) => (
                 <CandidateCard
-                  key={c.rank}
+                  key={`rejected-${i}`}
                   candidate={c}
                   expanded={expandedIds.has(c.rank)}
                   onToggle={() => toggleExpand(c.rank)}

@@ -1,16 +1,50 @@
 export interface Candidate {
   rank: number;
   name: string;
-  notes: string;
+  summary: string;
   institution: string;
   city: string;
   specialty: string;
   evidence: string;
   source: string;
   profileLink: string | null;
-  confidence: number;
+  score: number;
   status: "accepted" | "rejected";
   rejectionReason?: string;
+  rejectionStage?: "filtering" | "research" | "score";
+}
+
+/** Discovery round LLM output */
+export interface DiscoveryRoundOutput {
+  candidates: DiscoveryCandidate[];
+  exhausted: boolean;
+}
+
+/** Discovery output — minimal, names only */
+export interface DiscoveryCandidate {
+  name: string;
+  notes: string;
+}
+
+/** Filtering output — same shape, cleaned */
+export interface FilteredCandidate {
+  name: string;
+  notes: string;
+}
+
+/** Research output — full candidate with score */
+export interface ResearchedCandidate {
+  name: string;
+  summary: string;
+  evidence: string;
+  score: number;
+  institution: string;
+  city: string;
+  specialty: string;
+  source: string;
+  profileLink: string | null;
+  disqualified: boolean;
+  disqualificationReason?: string;
 }
 
 export interface SearchRequest {
@@ -25,7 +59,8 @@ export interface SearchResponse {
     procedure: string;
     geography: string | null;
     searchCountDiscovery: number;
-    searchCountVetting: number;
+    searchCountFiltering: number;
+    searchCountResearch: number;
     timestamp: string;
   };
 }
@@ -53,7 +88,9 @@ export interface CountriesData {
 }
 
 export type SSEEvent =
-  | { type: "progress"; phase: "discovery" | "vetting" | "scoring"; message: string; current?: number; total?: number }
+  | { type: "progress"; phase: "discovery" | "filtering" | "research"; message: string; current?: number; total?: number }
+  | { type: "candidates_discovered"; names: string[] }
+  | { type: "candidates_filtered"; names: string[] }
   | { type: "result"; data: SearchResponse; searchId?: string | null }
   | { type: "error"; message: string }
   | { type: "done" };
