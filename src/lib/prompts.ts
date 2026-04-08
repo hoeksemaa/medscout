@@ -92,9 +92,9 @@ ${geoClause}
 ${accumulatedList}
 
 ## This Round
-You have up to ${remaining} web searches remaining in your total budget. Use up to 10 searches this round. Search different angles from previous rounds — try source types you haven't explored yet.
+You have ${remaining} web searches remaining in your total budget. You MUST use all 10 searches this round — do not stop early. Each search should target a different source type or angle. Even if early searches return thin results, later searches with different queries often surface candidates that generic queries miss. Exhaust all 10 before returning your candidates.
 
-If you believe you have exhausted the candidate pool (you keep finding the same people, or this is a niche procedure with a small number of practitioners), set "exhausted" to true and return whatever new candidates you found.`;
+Only set "exhausted" to true if you are confident that further searching would be redundant — e.g., you are seeing the exact same names across every search, or the procedure is exceptionally niche with fewer than ~15 known practitioners worldwide. When in doubt, set false.`;
 }
 
 // ---------------------------------------------------------------------------
