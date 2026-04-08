@@ -11,6 +11,7 @@ import {
   buildScoringMessage,
 } from "@/lib/prompts";
 import { formatGeography } from "@/lib/countries";
+import { MAX_ACCEPTED_RESULTS } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { Candidate, SearchResponse, SSEEvent } from "@/lib/types";
@@ -109,7 +110,6 @@ async function runDiscoveryPhase(
   client: Anthropic,
   procedure: string,
   geography: string | null,
-  resultCount: number,
   searchKey: string,
   sendProgress: (event: SSEEvent) => void
 ): Promise<DiscoveryResult> {
@@ -128,7 +128,7 @@ async function runDiscoveryPhase(
   });
 
   const messages: Anthropic.MessageParam[] = [
-    { role: "user", content: buildDiscoveryMessage(procedure, geography, resultCount) },
+    { role: "user", content: buildDiscoveryMessage(procedure, geography) },
   ];
 
   let response = await client.messages.create({
@@ -296,7 +296,6 @@ async function runScoringPhase(
   client: Anthropic,
   candidates: Candidate[],
   vettingResults: Record<string, string>,
-  resultCount: number,
   sendProgress: (event: SSEEvent) => void
 ): Promise<ScoringResult> {
   const auditEntries: AuditEntry[] = [];
@@ -306,32 +305,59 @@ async function runScoringPhase(
     candidates_to_score: candidates.length,
   }));
 
+  const totalCandidates = candidates.length;
+
   sendProgress({
     type: "progress",
     phase: "scoring",
     message: "Scoring and ranking candidates...",
+    current: 0,
+    total: totalCandidates,
   });
 
-  const response = await client.messages.create({
+  let accumulatedText = "";
+  let scoredCount = 0;
+
+  const stream = client.messages.stream({
     model: LLM_MODEL,
     max_tokens: 16000,
     system: SYSTEM_PROMPT,
     messages: [
       {
         role: "user",
-        content: buildScoringMessage(candidates, vettingResults, resultCount),
+        content: buildScoringMessage(candidates, vettingResults),
       },
     ],
   });
 
-  const tokensIn = response.usage.input_tokens;
-  const tokensOut = response.usage.output_tokens;
+  stream.on("text", (delta) => {
+    accumulatedText += delta;
+    const newCount = (accumulatedText.match(/"status"\s*:/g) || []).length;
+    if (newCount > scoredCount) {
+      scoredCount = newCount;
+      const nameMatches = accumulatedText.match(/"name"\s*:\s*"([^"]*)"/g);
+      const last = nameMatches?.[nameMatches.length - 1]?.match(/"name"\s*:\s*"([^"]*)"/);
+      const name = last?.[1] ?? "candidate";
+      sendProgress({
+        type: "progress",
+        phase: "scoring",
+        message: `Scored ${name}`,
+        current: scoredCount,
+        total: totalCandidates,
+      });
+    }
+  });
+
+  const finalMessage = await stream.finalMessage();
+
+  const tokensIn = finalMessage.usage.input_tokens;
+  const tokensOut = finalMessage.usage.output_tokens;
   auditEntries.push(auditEntry("scoring", "llm_call", {
     tokens_in: tokensIn,
     tokens_out: tokensOut,
   }));
 
-  const text = response.content
+  const text = finalMessage.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("\n");
@@ -354,7 +380,6 @@ interface SearchRequestBody {
   procedure: string;
   region?: string;
   countries?: string[];
-  resultCount?: number;
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -383,7 +408,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { procedure, region, countries, resultCount = 20 } = body;
+  const { procedure, region, countries } = body;
 
   if (!procedure) {
     return Response.json(
@@ -405,7 +430,7 @@ export async function POST(req: Request): Promise<Response> {
       user_id: user.id,
       procedure,
       geography,
-      requested_count: resultCount,
+      requested_count: MAX_ACCEPTED_RESULTS,
       status: "running",
       search_engine: SEARCH_ENGINE,
       llm_model: LLM_MODEL,
@@ -431,7 +456,7 @@ export async function POST(req: Request): Promise<Response> {
 
         // Phase 1: Discovery
         const discovery = await runDiscoveryPhase(
-          client, procedure, geography, resultCount, braveSearchKey, send
+          client, procedure, geography, braveSearchKey, send
         );
         allAuditEntries.push(...discovery.auditEntries);
         totalTokensIn += discovery.tokensIn;
@@ -471,7 +496,7 @@ export async function POST(req: Request): Promise<Response> {
 
         // Phase 3: Scoring
         const scoring = await runScoringPhase(
-          client, discovery.candidates, vetting.vettingResults, resultCount, send
+          client, discovery.candidates, vetting.vettingResults, send
         );
         allAuditEntries.push(...scoring.auditEntries);
         totalTokensIn += scoring.tokensIn;

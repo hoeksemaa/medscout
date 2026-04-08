@@ -34,9 +34,9 @@ dr-yellowpages/
     │
     ├── lib/
     │   ├── types.ts                      — TypeScript interfaces: Candidate, SearchRequest, SearchResponse, WebSearchResult, Region, Country, CountriesData, SSEEvent
-    │   ├── constants.ts                  — App-wide variables: unlock price, visible free result count, minimum password length
+    │   ├── constants.ts                  — App-wide variables: unlock price, visible free result count, candidate pool cap, accepted results cap, minimum password length
     │   ├── prompts.ts                    — LLM system prompt, discovery/scoring message builders, web_search tool definition
-    │   ├── use-search.ts                 — Client hook: search state machine (idle/searching/results/error), SSE stream parser, candidatesToCSV export
+    │   ├── use-search.ts                 — Client hook: search state machine (idle/searching/results/error), SSE stream parser, CSV export
     │   ├── web-search.ts                 — Web search provider: calls configured search API, returns normalized WebSearchResult[]; also formatSearchResults for LLM
     │   ├── countries.ts                  — Geography utilities: getRegions, getCountries, getCountriesByRegion, formatGeography
     │   ├── stripe.ts                     — Stripe client singleton, lazily initialized from env secret key
@@ -50,7 +50,7 @@ dr-yellowpages/
     ├── components/
     │   ├── dr-yellowpages-app.tsx              — Client root: orchestrates search state, conditionally renders SearchForm/SearchProgress/ResultsTable/error
     │   ├── nav-header.tsx                — Header bar: Dr. YellowPages branding, user email, History link, logout button
-    │   ├── search-form.tsx               — Search input: procedure name, region/country filter, result count slider (5–50), estimated wait time
+    │   ├── search-form.tsx               — Search input: procedure name, region/country filter
     │   ├── search-progress.tsx           — Progress display: current phase, progress bar, status messages during search
     │   ├── results-table.tsx             — Results: accepted candidate cards, collapsed rejected section, confidence badges, CSV download, unlock overlay
     │   └── ui/                           — shadcn/ui primitives (copied in, not npm deps)
@@ -109,13 +109,12 @@ The core value proposition: if a company already knows 10 names and we surface 2
 1. Sign up or log in (email + password)
 2. Enter procedure or device name (free text, required)
 3. Optionally select a geographic filter (region and/or country)
-4. Set result count (slider, 5–50, default 20)
-5. Click "Search"
-6. Watch streaming progress ("Discovering... Vetting 7 of 20... Scoring...")
-7. Receive results — a configurable number of top results are shown free, the rest are blurred behind a paywall
-8. Pay to unlock the full result set for that search
-9. Download as CSV
-10. Revisit past searches via the History page
+4. Click "Search"
+5. Watch streaming progress ("Discovering... Vetting 7 of 20... Scoring...")
+6. Receive results — a configurable number of top results are shown free, the rest are blurred behind a paywall
+7. Pay to unlock the full result set for that search
+8. Download as CSV
+9. Revisit past searches via the History page
 
 Single-shot interaction. Each query produces one response. No multi-turn chat.
 
@@ -135,9 +134,6 @@ Two levels, both optional:
 2. **Country** — multi-select, filtered by region if one is selected. Full list from `countries.json`.
 
 If no geography is specified, search is worldwide (results will naturally skew toward countries with strong publication cultures). The LLM should note this bias.
-
-### Number of Results
-Default 20, range 5–50. More results = longer wait and more search API usage. The UI displays an estimated wait time.
 
 ## Outputs
 
@@ -205,7 +201,7 @@ Maximum: 100. Minimum to include: 20.
 ## Search Pipeline
 
 ### Phase 1: Discovery
-The LLM runs 8–12 web searches to build a candidate pool of roughly 3x the requested result count. Searches target PubMed, hospital sites, professional directories, conference proceedings, specialty journals, Doximity, LinkedIn, YouTube.
+The LLM runs 8–12 web searches to build a candidate pool of up to `MAX_CANDIDATES_TO_CONSIDER` (currently 200). Searches target PubMed, hospital sites, professional directories, conference proceedings, specialty journals, Doximity, LinkedIn, YouTube.
 
 The LLM is given a single tool — `web_search(query: string)` — which wraps the search provider. The LLM calls this tool in an agentic loop (it keeps calling until it stops or hits 12 calls). When the loop ends, the LLM returns candidates as a JSON array wrapped in `<candidates>` tags.
 
@@ -232,7 +228,7 @@ Query: `"{Name}" "{Institution}" {procedure}`
 This surfaces whether they exist at that institution, whether they're associated with the procedure, whether any obituary or retirement notice appears, and their institutional profile URL.
 
 ### Phase 3: Scoring
-The LLM receives the raw candidates plus their vetting search results. It assigns confidence scores per the rubric, writes Notes, marks the top N (where N = requested result count) as accepted and the rest as rejected with reasons, and drops anyone below the confidence threshold. The LLM returns scored candidates as a JSON array wrapped in `<results>` tags. Each candidate now includes `rank`, `status` ("accepted" | "rejected"), and optionally `rejectionReason`.
+The LLM receives the raw candidates plus their vetting search results. It assigns confidence scores per the rubric, writes Notes, marks the top `MAX_ACCEPTED_RESULTS` (currently 100) as accepted and the rest as rejected with reasons, and drops anyone below the confidence threshold. The LLM returns scored candidates as a JSON array wrapped in `<results>` tags. Each candidate now includes `rank`, `status` ("accepted" | "rejected"), and optionally `rejectionReason`.
 
 After the LLM returns, the server deterministically sorts all candidates by confidence descending and reassigns rank 1–N. The LLM's ordering is not trusted — sorting is mechanically enforced.
 
@@ -288,7 +284,7 @@ A query is successful if:
 2. Every source citation is verifiable
 3. At least 80% of accepted results have a confidence score >= 40
 4. Results include names a knowledgeable insider would recognize, plus at least a few they wouldn't
-5. Query completes in under 5 minutes for 20 results
+5. Query completes within a reasonable time frame
 
 ---
 
@@ -324,7 +320,7 @@ Three tables, all with row-level security:
 **profiles** — linked to `auth.users`. Stores `stripe_customer_id`.
 
 **searches** — append-only. Each row is one search run. Stores:
-- Request params: procedure, geography, requested_count
+- Request params: procedure, geography, requested_count (stores MAX_ACCEPTED_RESULTS at time of search)
 - Results: status (running/completed/failed), result_count, results_json (JSONB), error_message
 - Provider tracking: search_engine, llm_model
 - Usage: search_count_discovery, search_count_vetting, tokens_in, tokens_out
@@ -354,7 +350,7 @@ Event types by phase:
 
 ### `POST /api/search`
 
-Accepts procedure, geography, and result count. Streams SSE events (progress, result, error, done). Orchestrates the three-phase pipeline: discovery via LLM with tool use, vetting via direct search API calls, scoring via LLM. Stores the search record and audit log in Supabase throughout.
+Accepts procedure and geography. Streams SSE events (progress, result, error, done). Orchestrates the three-phase pipeline: discovery via LLM with tool use, vetting via direct search API calls, scoring via LLM. Pool size and accepted count are controlled by developer constants (`MAX_CANDIDATES_TO_CONSIDER`, `MAX_ACCEPTED_RESULTS`), not user input. Stores the search record and audit log in Supabase throughout.
 
 ### `POST /api/billing/checkout`
 
