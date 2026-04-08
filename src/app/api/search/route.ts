@@ -138,6 +138,7 @@ async function runDiscoveryPhase(
 
   // Run discovery in rounds
   let roundNum = 0;
+  let consecutiveEmptyRounds = 0;
   while (totalSearchCount < MAX_DISCOVERY_SEARCHES) {
     roundNum++;
     let roundSearchCount = 0;
@@ -249,12 +250,14 @@ async function runDiscoveryPhase(
     try {
       roundOutput = parseJSON<DiscoveryRoundOutput>(text, "candidates");
     } catch {
-      // If we can't parse, treat as zero new candidates
+      // Parse failure in a single round shouldn't kill discovery — try the next round
       auditEntries.push(auditEntry("discovery", "parse_error", {
         round: roundNum,
         text_preview: text.slice(0, 300),
       }));
-      break;
+      consecutiveEmptyRounds++;
+      if (consecutiveEmptyRounds >= 2) break;
+      continue;
     }
 
     const newCandidates = roundOutput.candidates ?? [];
@@ -275,14 +278,23 @@ async function runDiscoveryPhase(
       message: `Round ${roundNum} complete — ${allCandidates.length} candidates found so far`,
     });
 
-    sendProgress({
-      type: "candidates_discovered",
-      names: allCandidates.map((c) => c.name),
-    });
+    if (allCandidates.length > 0) {
+      sendProgress({
+        type: "candidates_discovered",
+        names: allCandidates.map((c) => c.name),
+      });
+    }
+
+    // Track consecutive empty rounds — a single dry round shouldn't kill discovery
+    if (newCandidates.length === 0) {
+      consecutiveEmptyRounds++;
+    } else {
+      consecutiveEmptyRounds = 0;
+    }
 
     // Stop conditions
-    if (roundOutput.exhausted) break;
-    if (newCandidates.length === 0) break;
+    if (roundOutput.exhausted && allCandidates.length > 0) break;
+    if (consecutiveEmptyRounds >= 2) break;
     if (totalSearchCount >= MAX_DISCOVERY_SEARCHES) break;
   }
 
