@@ -2,7 +2,7 @@
 export const UNLOCK_PRICE_USD = 1;
 
 /** Number of results shown unblurred in a locked search */
-export const VISIBLE_RESULTS_COUNT = 3;
+export const VISIBLE_RESULTS_COUNT = 10;
 
 /** Max web searches per discovery chunk (tool stripped at this cap) */
 export const MAX_DISCOVERY_SEARCHES_PER_CHUNK = 15;
