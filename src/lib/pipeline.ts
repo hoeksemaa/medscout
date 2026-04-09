@@ -481,6 +481,11 @@ async function runResearchAgent(
     messages.push({ role: "user", content: toolResults });
 
     if (searchCount >= maxSearches) {
+      // Tell the model its search budget is spent and it must produce output now
+      messages.push({
+        role: "user",
+        content: "You have used all of your web searches. Based on everything you found, produce your final <research> JSON output now.",
+      });
       response = await client.messages.create({
         model: LLM_MODEL,
         max_tokens: 8000,
