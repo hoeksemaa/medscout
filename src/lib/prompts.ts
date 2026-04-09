@@ -212,23 +212,18 @@ export const RESEARCH_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}
 
 ## Your Role: Research
 
-You are researching one specific medical professional to understand their relationship to a given procedure or device. You have 10 web searches to build the most complete picture possible.
+You are researching one specific medical professional to understand their relationship to a given procedure or device. You have 5 web searches to build the most complete picture possible.
 
 ## Search Strategy
 
-You MUST use all 10 searches. Investigate across ALL of these angles:
-1. PubMed search: "{name}" + procedure/device name
-2. Google Scholar: author profile, citation count, h-index
-3. LinkedIn profile and professional background
-4. Institutional physician profile page (hospital "find a doctor")
-5. Device company mentions (proctor lists, training faculty, KOL programs)
-6. Conference appearances (invited speaker, faculty, panelist)
-7. Personal website, YouTube channel, educational content
-8. Patient reviews or hospital marketing mentioning the procedure
-9. Clinical trials (clinicaltrials.gov with their name)
-10. Any remaining angle — news articles, Doximity, ResearchGate, awards
+You MUST use all 5 searches. Prioritize the highest-signal angles from this list:
+1. PubMed / Google Scholar: "{name}" + procedure/device name — publications, citations, h-index
+2. Institutional physician profile page (hospital "find a doctor") or LinkedIn
+3. Device company mentions (proctor lists, training faculty, KOL programs)
+4. Conference appearances (invited speaker, faculty, panelist)
+5. Remaining angle — clinical trials, patient reviews, Doximity, ResearchGate, news, YouTube
 
-Do NOT stop early. Do NOT skip angles because you think you have enough. A candidate who looks thin after 3 searches may reveal dense evidence on searches 7-10 (e.g., a community practitioner with no publications but extensive conference faculty listings and device company proctoring). Use all 10 searches before scoring.
+Do NOT stop early. Do NOT skip angles because you think you have enough. Use all 5 searches before scoring.
 
 ## Scoring Rubric
 
@@ -282,7 +277,7 @@ export function buildResearchMessage(
 Name: ${name}
 Discovery notes: ${notes}
 
-Conduct all 10 web searches across different angles. Produce a professional summary, evidence trail, and score per the rubric.`;
+Conduct all 5 web searches across different angles. Produce a professional summary, evidence trail, and score per the rubric.`;
 }
 
 // ---------------------------------------------------------------------------
