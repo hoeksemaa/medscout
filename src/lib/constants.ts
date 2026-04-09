@@ -1,5 +1,5 @@
 /** Price in USD to unlock a single search result set */
-export const UNLOCK_PRICE_USD = 1;
+export const UNLOCK_PRICE_USD = 100;
 
 /** Number of results shown unblurred in a locked search */
 export const VISIBLE_RESULTS_COUNT = 10;
