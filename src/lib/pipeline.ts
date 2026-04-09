@@ -546,7 +546,7 @@ export async function runResearchChunk(
     total: totalCandidates,
   });
 
-  const limit = pLimit(10);
+  const limit = pLimit(3);
 
   const promises = candidates.map((candidate) =>
     limit(async () => {
