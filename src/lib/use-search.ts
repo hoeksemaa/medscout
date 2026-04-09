@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { Candidate, SearchResponse, SSEEvent } from "./types";
 
 export type SearchState =
@@ -20,6 +20,7 @@ export type SearchState =
 async function consumeSSEStream(
   res: Response,
   onEvent: (event: SSEEvent) => void,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const reader = res.body?.getReader();
   if (!reader) return null;
@@ -28,31 +29,41 @@ async function consumeSSEStream(
   let buffer = "";
   let chunkDoneSearchId: string | null = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      if (signal?.aborted) {
+        await reader.cancel();
+        return null;
+      }
 
-    buffer += decoder.decode(value, { stream: true });
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    const lines = buffer.split("\n\n");
-    buffer = lines.pop() ?? "";
+      buffer += decoder.decode(value, { stream: true });
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: ")) continue;
-      const json = trimmed.slice(6);
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() ?? "";
 
-      try {
-        const event: SSEEvent = JSON.parse(json);
-        onEvent(event);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const json = trimmed.slice(6);
 
-        if (event.type === "chunk_done") {
-          chunkDoneSearchId = event.searchId;
+        try {
+          const event: SSEEvent = JSON.parse(json);
+          onEvent(event);
+
+          if (event.type === "chunk_done") {
+            chunkDoneSearchId = event.searchId;
+          }
+        } catch {
+          // skip unparseable
         }
-      } catch {
-        // skip unparseable
       }
     }
+  } catch (err) {
+    if (signal?.aborted) return null;
+    throw err;
   }
 
   return chunkDoneSearchId;
@@ -60,6 +71,13 @@ async function consumeSSEStream(
 
 export function useSearch() {
   const [state, setState] = useState<SearchState>({ status: "idle" });
+  const abortRef = useRef<AbortController | null>(null);
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setState({ status: "idle" });
+  }, []);
 
   const search = useCallback(
     async (params: {
@@ -67,6 +85,11 @@ export function useSearch() {
       region?: string;
       countries?: string[];
     }) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const { signal } = controller;
+
       setState({
         status: "searching",
         phase: "discovery",
@@ -77,6 +100,8 @@ export function useSearch() {
       let currentNames: string[] = [];
 
       const handleEvent = (event: SSEEvent) => {
+        if (signal.aborted) return;
+
         if (event.type === "progress") {
           setState({
             status: "searching",
@@ -112,12 +137,14 @@ export function useSearch() {
       };
 
       try {
-        // Initial request — starts pipeline, runs first discovery chunk
         const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(params),
+          signal,
         });
+
+        if (signal.aborted) return;
 
         if (!res.ok) {
           const err = await res.json();
@@ -125,15 +152,17 @@ export function useSearch() {
           return;
         }
 
-        let searchId = await consumeSSEStream(res, handleEvent);
+        let searchId = await consumeSSEStream(res, handleEvent, signal);
 
-        // Chain continue requests until pipeline completes (no more chunk_done)
-        while (searchId) {
+        while (searchId && !signal.aborted) {
           const continueRes = await fetch("/api/search/continue", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ searchId }),
+            signal,
           });
+
+          if (signal.aborted) return;
 
           if (!continueRes.ok) {
             const err = await continueRes.json();
@@ -141,9 +170,10 @@ export function useSearch() {
             return;
           }
 
-          searchId = await consumeSSEStream(continueRes, handleEvent);
+          searchId = await consumeSSEStream(continueRes, handleEvent, signal);
         }
       } catch (err) {
+        if (signal.aborted) return;
         setState({
           status: "error",
           message: err instanceof Error ? err.message : "Network error occurred",
@@ -154,10 +184,12 @@ export function useSearch() {
   );
 
   const reset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setState({ status: "idle" });
   }, []);
 
-  return { state, search, reset };
+  return { state, search, stop, reset };
 }
 
 export function candidatesToCSV(

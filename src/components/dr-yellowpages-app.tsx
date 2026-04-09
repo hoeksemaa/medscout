@@ -12,7 +12,7 @@ interface DrYellowPagesAppProps {
 }
 
 export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
-  const { state, search } = useSearch();
+  const { state, search, stop } = useSearch();
 
   const handleSearch = useCallback(
     (params: {
@@ -45,6 +45,7 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
           names={state.names}
           current={state.current}
           total={state.total}
+          onStop={stop}
         />
       )}
 

@@ -1,8 +1,9 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Loader2 } from "lucide-react";
+import { Loader2, Square } from "lucide-react";
 
 interface SearchProgressProps {
   phase: "discovery" | "filtering" | "research";
@@ -10,6 +11,7 @@ interface SearchProgressProps {
   names: string[];
   current?: number;
   total?: number;
+  onStop?: () => void;
 }
 
 export function SearchProgress({
@@ -18,6 +20,7 @@ export function SearchProgress({
   names,
   current,
   total,
+  onStop,
 }: SearchProgressProps) {
   const phaseLabel =
     phase === "discovery"
@@ -36,9 +39,20 @@ export function SearchProgress({
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           <span className="font-medium">{phaseLabel}</span>
           {current != null && total != null && (
-            <span className="ml-auto text-sm text-muted-foreground font-mono">
+            <span className="text-sm text-muted-foreground font-mono">
               {current} of {total}
             </span>
+          )}
+          {onStop && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={onStop}
+              className="ml-auto"
+            >
+              <Square className="h-3 w-3 mr-1.5 fill-current" />
+              Stop
+            </Button>
           )}
         </div>
 
