@@ -557,9 +557,16 @@ export async function runResearchChunk(
   });
 
   const limit = pLimit(1);
+  let isFirstAgent = true;
 
   const promises = candidates.map((candidate) =>
     limit(async () => {
+      // 3s pause between agents to avoid rate limits
+      if (!isFirstAgent) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      isFirstAgent = false;
+
       try {
         const agentResult = await runResearchAgent(
           client,
