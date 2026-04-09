@@ -12,6 +12,7 @@ import {
 } from "@/lib/prompts";
 import {
   MAX_ACCEPTED_RESULTS,
+  MAX_DISCOVERY_SEARCHES_PER_CHUNK,
   MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
 } from "@/lib/constants";
 import type {
@@ -185,15 +186,24 @@ export async function runDiscoveryChunk(
 
     messages.push({ role: "user", content: toolResults });
 
-    // Always pass tools — let the LLM decide when to stop searching naturally.
-    // Cap is enforced via prompt instruction ("approximately 20 searches").
-    response = await client.messages.create({
-      model: LLM_MODEL,
-      max_tokens: 16000,
-      system: DISCOVERY_SYSTEM_PROMPT,
-      tools: [WEB_SEARCH_TOOL],
-      messages,
-    });
+    // Strip tools at the per-chunk cap to force candidate JSON output.
+    // The flexible parser handles whatever format the LLM produces.
+    if (searchCount >= MAX_DISCOVERY_SEARCHES_PER_CHUNK) {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: DISCOVERY_SYSTEM_PROMPT,
+        messages,
+      });
+    } else {
+      response = await client.messages.create({
+        model: LLM_MODEL,
+        max_tokens: 16000,
+        system: DISCOVERY_SYSTEM_PROMPT,
+        tools: [WEB_SEARCH_TOOL],
+        messages,
+      });
+    }
 
     tokensIn += response.usage.input_tokens;
     tokensOut += response.usage.output_tokens;

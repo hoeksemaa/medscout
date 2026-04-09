@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-export const maxDuration = 200;
+export const maxDuration = 275;
 
 import { formatGeography } from "@/lib/countries";
 import { MAX_ACCEPTED_RESULTS, MAX_DISCOVERY_TOTAL_SEARCHES } from "@/lib/constants";
@@ -85,7 +85,7 @@ export async function POST(req: Request): Promise<Response> {
       const send = (event: SSEEvent) => sendSSE(controller, event);
 
       try {
-        const anthropic = new Anthropic({ apiKey: anthropicKey });
+        const anthropic = new Anthropic({ apiKey: anthropicKey, maxRetries: 5 });
 
         // Run first discovery chunk
         const discovery = await runDiscoveryChunk(
@@ -94,7 +94,7 @@ export async function POST(req: Request): Promise<Response> {
         );
 
         const newSearchCount = discovery.searchCount;
-        const moreDiscovery = newSearchCount < MAX_DISCOVERY_TOTAL_SEARCHES && discovery.candidates.length > 0;
+        const moreDiscovery = newSearchCount < MAX_DISCOVERY_TOTAL_SEARCHES;
 
         // Determine next step
         const nextState: PipelineState = {
