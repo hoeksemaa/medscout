@@ -5,18 +5,14 @@ import { webSearch, formatSearchResults } from "@/lib/web-search";
 import {
   DISCOVERY_SYSTEM_PROMPT,
   FILTERING_SYSTEM_PROMPT,
-  CROSS_BATCH_DEDUP_SYSTEM_PROMPT,
   RESEARCH_SYSTEM_PROMPT,
   WEB_SEARCH_TOOL,
   buildDiscoveryRoundMessage,
-  buildFilteringMessage,
-  buildCrossBatchDedupMessage,
   buildResearchMessage,
 } from "@/lib/prompts";
 import {
   MAX_ACCEPTED_RESULTS,
   MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
-  FILTERING_BATCH_SIZE,
 } from "@/lib/constants";
 import type {
   Candidate,
@@ -310,7 +306,6 @@ export async function runFilteringPhase(
   searchKey: string,
   sendProgress: (event: SSEEvent) => void,
 ): Promise<FilteringResult> {
-  let searchCount = 0;
   let tokensIn = 0;
   let tokensOut = 0;
   const auditEntries: AuditEntry[] = [];
@@ -320,142 +315,61 @@ export async function runFilteringPhase(
     candidates_to_filter: candidates.length,
   }));
 
-  const searchResults: Record<string, string> = {};
+  sendProgress({
+    type: "progress",
+    phase: "filtering",
+    message: `Filtering ${candidates.length} candidates — deduplicating and normalizing names...`,
+  });
 
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    const query = `"${c.name}" ${procedure}`;
+  // Single LLM call — no per-candidate searches, no batching.
+  // Filtering works from discovery notes alone. Deceased/retired detection
+  // is deferred to the research phase (10 searches per candidate).
+  let finalSurviving: FilteredCandidate[] = [];
+  let finalRejected: FilterRejection[] = [];
 
-    sendProgress({
-      type: "progress",
-      phase: "filtering",
-      message: `Searching ${c.name}...`,
-      current: i + 1,
-      total: candidates.length,
+  try {
+    const candidateList = candidates
+      .map((c) => `- ${c.name}: ${c.notes}`)
+      .join("\n");
+
+    const response = await client.messages.create({
+      model: LLM_MODEL,
+      max_tokens: 16000,
+      system: FILTERING_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Review these candidates for: "${procedure}"\n\n## Candidates\n${candidateList}\n\nDeduplicate, disqualify obvious non-candidates, and normalize names per your instructions. Return ALL candidates — surviving and rejected.`,
+        },
+      ],
     });
 
-    try {
-      const results = await webSearch(query, searchKey);
-      searchCount++;
-      searchResults[c.name] = formatSearchResults(results);
-      auditEntries.push(auditEntry("filtering", "web_search", {
-        candidate: c.name,
-        query,
-        result_count: results.length,
-      }));
-    } catch (err) {
-      searchResults[c.name] = "Search failed.";
-      auditEntries.push(auditEntry("filtering", "web_search_error", {
-        candidate: c.name,
-        query,
-        error: err instanceof Error ? err.message : "unknown",
-      }));
-    }
-  }
+    tokensIn += response.usage.input_tokens;
+    tokensOut += response.usage.output_tokens;
 
-  const allSurviving: FilteredCandidate[] = [];
-  const allRejected: FilterRejection[] = [];
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
 
-  for (let i = 0; i < candidates.length; i += FILTERING_BATCH_SIZE) {
-    const batch = candidates.slice(i, i + FILTERING_BATCH_SIZE);
-    const batchResults: Record<string, string> = {};
-    for (const c of batch) {
-      batchResults[c.name] = searchResults[c.name] ?? "No search results.";
-    }
+    const parsed = parseJSON<{
+      surviving: FilteredCandidate[];
+      rejected: FilterRejection[];
+    }>(text, "filtered");
 
-    sendProgress({
-      type: "progress",
-      phase: "filtering",
-      message: `Evaluating batch ${Math.floor(i / FILTERING_BATCH_SIZE) + 1}...`,
-    });
+    finalSurviving = parsed.surviving ?? [];
+    finalRejected = parsed.rejected ?? [];
 
-    try {
-      const response = await client.messages.create({
-        model: LLM_MODEL,
-        max_tokens: 16000,
-        system: FILTERING_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: buildFilteringMessage(batch, batchResults, procedure) },
-        ],
-      });
-
-      tokensIn += response.usage.input_tokens;
-      tokensOut += response.usage.output_tokens;
-
-      const text = response.content
-        .filter((b): b is Anthropic.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
-
-      const parsed = parseJSON<{
-        surviving: FilteredCandidate[];
-        rejected: FilterRejection[];
-      }>(text, "filtered");
-
-      allSurviving.push(...(parsed.surviving ?? []));
-      allRejected.push(...(parsed.rejected ?? []));
-
-      auditEntries.push(auditEntry("filtering", "batch_eval", {
-        batch_start: i,
-        batch_size: batch.length,
-        surviving: parsed.surviving?.length ?? 0,
-        rejected: parsed.rejected?.length ?? 0,
-      }));
-    } catch (err) {
-      auditEntries.push(auditEntry("filtering", "batch_eval_error", {
-        batch_start: i,
-        error: err instanceof Error ? err.message : "unknown",
-      }));
-      allSurviving.push(...batch);
-    }
-  }
-
-  let finalSurviving = allSurviving;
-  let finalRejected = allRejected;
-
-  if (candidates.length > FILTERING_BATCH_SIZE && allSurviving.length > 0) {
-    sendProgress({
-      type: "progress",
-      phase: "filtering",
-      message: "Cross-batch deduplication...",
-    });
-
-    try {
-      const response = await client.messages.create({
-        model: LLM_MODEL,
-        max_tokens: 16000,
-        system: CROSS_BATCH_DEDUP_SYSTEM_PROMPT,
-        messages: [
-          { role: "user", content: buildCrossBatchDedupMessage(allSurviving) },
-        ],
-      });
-
-      tokensIn += response.usage.input_tokens;
-      tokensOut += response.usage.output_tokens;
-
-      const text = response.content
-        .filter((b): b is Anthropic.TextBlock => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
-
-      const parsed = parseJSON<{
-        surviving: FilteredCandidate[];
-        rejected: FilterRejection[];
-      }>(text, "deduped");
-
-      finalSurviving = parsed.surviving ?? allSurviving;
-      finalRejected = [...allRejected, ...(parsed.rejected ?? [])];
-
-      auditEntries.push(auditEntry("filtering", "cross_batch_dedup", {
-        before: allSurviving.length,
-        after: finalSurviving.length,
-        new_rejects: parsed.rejected?.length ?? 0,
-      }));
-    } catch (err) {
-      auditEntries.push(auditEntry("filtering", "cross_batch_dedup_error", {
-        error: err instanceof Error ? err.message : "unknown",
-      }));
-    }
+    auditEntries.push(auditEntry("filtering", "eval_complete", {
+      surviving: finalSurviving.length,
+      rejected: finalRejected.length,
+    }));
+  } catch (err) {
+    // On failure, keep all candidates as surviving — research will evaluate
+    auditEntries.push(auditEntry("filtering", "eval_error", {
+      error: err instanceof Error ? err.message : "unknown",
+    }));
+    finalSurviving = candidates;
   }
 
   auditEntries.push(auditEntry("filtering", "phase_end", {
@@ -477,7 +391,7 @@ export async function runFilteringPhase(
   return {
     surviving: finalSurviving,
     rejected: finalRejected,
-    searchCount,
+    searchCount: 0,
     durationMs: Date.now() - start,
     tokensIn,
     tokensOut,
