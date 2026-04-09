@@ -4,9 +4,6 @@ export const UNLOCK_PRICE_USD = 1;
 /** Number of results shown unblurred in a locked search */
 export const VISIBLE_RESULTS_COUNT = 3;
 
-/** Max web searches per discovery chunk (single agentic loop) */
-export const MAX_DISCOVERY_SEARCHES_PER_CHUNK = 20;
-
 /** Max total discovery searches across all chunks */
 export const MAX_DISCOVERY_TOTAL_SEARCHES = 60;
 

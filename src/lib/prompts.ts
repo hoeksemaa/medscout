@@ -57,15 +57,13 @@ Do NOT stop searching just because you found some names. The goal is to find EVE
 
 ## Output Format
 
-When you are done searching, return ALL found candidates as a JSON object wrapped in <candidates> tags:
+When you are done searching, return ALL found candidates as a STRICT JSON array wrapped in <candidates> tags. The JSON must be valid — no trailing commas, no comments. Example:
 
 <candidates>
-{
-  "candidates": [
-    { "name": "Amy E. Krambeck, MD", "notes": "Found via PubMed — lead author on HoLEP case series" },
-    { "name": "Robert Stein", "notes": "Mentioned in Northwestern fellowship directory" }
-  ]
-}
+[
+  { "name": "Amy E. Krambeck, MD", "notes": "Found via PubMed — lead author on HoLEP case series" },
+  { "name": "Robert Stein", "notes": "Mentioned in Northwestern fellowship directory" }
+]
 </candidates>
 
 Keep notes brief — one sentence explaining where/why you found this person. Enough context for a later deduplication step, not a full evaluation.`;
@@ -96,7 +94,9 @@ ${accumulatedList}
 ## Search Budget
 You have ${remaining} web searches remaining in your total budget. Use your full allocation this round — do not stop early. Each search should target a different angle: publications, institutional directories, conference proceedings, professional networks (especially LinkedIn), device company sites, clinical trials, etc.${accumulatedCandidates.length > 0 ? " Search DIFFERENT angles from what found the candidates above." : ""}
 
-Your goal is to build the largest viable candidate pool possible. Include anyone who plausibly performs or is associated with this procedure. Better to include a marginal candidate than to miss a real one — later stages will filter and evaluate.`;
+Your goal is to build the largest viable candidate pool possible. Include anyone who plausibly performs or is associated with this procedure. Better to include a marginal candidate than to miss a real one — later stages will filter and evaluate.
+
+Make approximately 20 searches, then return your findings as a STRICT JSON array wrapped in <candidates> tags. Each element must have "name" and "notes" fields.`;
 }
 
 // ---------------------------------------------------------------------------

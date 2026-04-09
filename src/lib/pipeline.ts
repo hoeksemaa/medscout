@@ -15,7 +15,6 @@ import {
 } from "@/lib/prompts";
 import {
   MAX_ACCEPTED_RESULTS,
-  MAX_DISCOVERY_SEARCHES_PER_CHUNK,
   MAX_RESEARCH_SEARCHES_PER_CANDIDATE,
   FILTERING_BATCH_SIZE,
 } from "@/lib/constants";
@@ -190,22 +189,15 @@ export async function runDiscoveryChunk(
 
     messages.push({ role: "user", content: toolResults });
 
-    if (searchCount >= MAX_DISCOVERY_SEARCHES_PER_CHUNK) {
-      response = await client.messages.create({
-        model: LLM_MODEL,
-        max_tokens: 16000,
-        system: DISCOVERY_SYSTEM_PROMPT,
-        messages,
-      });
-    } else {
-      response = await client.messages.create({
-        model: LLM_MODEL,
-        max_tokens: 16000,
-        system: DISCOVERY_SYSTEM_PROMPT,
-        tools: [WEB_SEARCH_TOOL],
-        messages,
-      });
-    }
+    // Always pass tools — let the LLM decide when to stop searching naturally.
+    // Cap is enforced via prompt instruction ("approximately 20 searches").
+    response = await client.messages.create({
+      model: LLM_MODEL,
+      max_tokens: 16000,
+      system: DISCOVERY_SYSTEM_PROMPT,
+      tools: [WEB_SEARCH_TOOL],
+      messages,
+    });
 
     tokensIn += response.usage.input_tokens;
     tokensOut += response.usage.output_tokens;
@@ -217,19 +209,54 @@ export async function runDiscoveryChunk(
     .join("\n");
 
   let newCandidates: DiscoveryCandidate[] = [];
-  try {
-    const parsed = parseJSON<{ candidates: DiscoveryCandidate[] }>(text, "candidates");
-    newCandidates = parsed.candidates ?? [];
-  } catch {
-    auditEntries.push(auditEntry("discovery", "parse_error", {
-      text_preview: text.slice(0, 500),
-    }));
-    try {
-      const arr = parseJSON<DiscoveryCandidate[]>(text, "candidates");
-      if (Array.isArray(arr)) newCandidates = arr;
-    } catch {
-      // unparseable
+
+  // Flexible parse — try multiple formats (array, object, multiple tags, raw JSON)
+  const parseCandidates = (text: string): DiscoveryCandidate[] => {
+    // Try <candidates> tag first
+    for (const tag of ["candidates", "results"]) {
+      const re = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`);
+      const match = text.match(re);
+      if (match) {
+        const inner = match[1];
+        try {
+          const parsed = JSON.parse(inner);
+          // Could be an array directly, or an object with a candidates field
+          if (Array.isArray(parsed)) return parsed;
+          if (parsed?.candidates && Array.isArray(parsed.candidates)) return parsed.candidates;
+        } catch {
+          try {
+            const parsed = JSON.parse(repairJSON(inner));
+            if (Array.isArray(parsed)) return parsed;
+            if (parsed?.candidates && Array.isArray(parsed.candidates)) return parsed.candidates;
+          } catch { /* try next pattern */ }
+        }
+      }
     }
+
+    // Fallback: raw JSON array anywhere in text
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      try {
+        const parsed = JSON.parse(arrayMatch[0]);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        try {
+          const parsed = JSON.parse(repairJSON(arrayMatch[0]));
+          if (Array.isArray(parsed)) return parsed;
+        } catch { /* give up */ }
+      }
+    }
+
+    return [];
+  };
+
+  newCandidates = parseCandidates(text);
+
+  if (newCandidates.length === 0 && searchCount > 0) {
+    auditEntries.push(auditEntry("discovery", "parse_warning", {
+      text_preview: text.slice(0, 500),
+      message: "LLM searched but no candidates could be parsed from output",
+    }));
   }
 
   auditEntries.push(auditEntry("discovery", "chunk_end", {
