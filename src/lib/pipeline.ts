@@ -720,5 +720,13 @@ export function runScorePhase(
     }
   });
 
+  // Sort: accepted by rank ascending, then rejected
+  allCandidates.sort((a, b) => {
+    if (a.status === "accepted" && b.status === "accepted") return a.rank - b.rank;
+    if (a.status === "accepted") return -1;
+    if (b.status === "accepted") return 1;
+    return 0;
+  });
+
   return allCandidates;
 }
