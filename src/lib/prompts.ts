@@ -34,7 +34,7 @@ You are NOT scoring, ranking, or deeply evaluating anyone. You care about one bi
 
 ## Search Strategy
 
-You have a large search budget. USE IT ALL. Be curious, thorough, and relentless. Every search should target a different source type or angle. Even if early searches return thin results, keep going — later searches with different queries often surface candidates that generic queries miss.
+Every search should target a different source type or angle. Even if early searches return thin results, keep going — later searches with different queries often surface candidates that generic queries miss.
 
 Search across ALL of these source types (not just a few):
 - PubMed / medical journals (procedure name + author affiliations)
@@ -92,11 +92,11 @@ ${geoClause}
 ${accumulatedList}
 
 ## Search Budget
-You have ${remaining} web searches remaining in your total budget. Use your full allocation this round — do not stop early. Each search should target a different angle: publications, institutional directories, conference proceedings, professional networks (especially LinkedIn), device company sites, clinical trials, etc.${accumulatedCandidates.length > 0 ? " Search DIFFERENT angles from what found the candidates above." : ""}
+You have exactly 15 searches this round. Use all 15 — each targeting a different angle: publications, institutional directories, conference proceedings, professional networks (especially LinkedIn), device company sites, clinical trials, etc.${accumulatedCandidates.length > 0 ? " Search DIFFERENT angles from what found the candidates above." : ""}
 
 Your goal is to build the largest viable candidate pool possible. Include anyone who plausibly performs or is associated with this procedure. Better to include a marginal candidate than to miss a real one — later stages will filter and evaluate.
 
-Make approximately 20 searches, then return your findings as a STRICT JSON array wrapped in <candidates> tags. Each element must have "name" and "notes" fields.`;
+After your 15 searches, return your findings as a STRICT JSON array wrapped in <candidates> tags. Each element must have "name" and "notes" fields.`;
 }
 
 // ---------------------------------------------------------------------------

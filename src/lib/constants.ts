@@ -4,6 +4,9 @@ export const UNLOCK_PRICE_USD = 1;
 /** Number of results shown unblurred in a locked search */
 export const VISIBLE_RESULTS_COUNT = 3;
 
+/** Max web searches per discovery chunk (tool stripped at this cap) */
+export const MAX_DISCOVERY_SEARCHES_PER_CHUNK = 15;
+
 /** Max total discovery searches across all chunks */
 export const MAX_DISCOVERY_TOTAL_SEARCHES = 60;
 
@@ -11,7 +14,7 @@ export const MAX_DISCOVERY_TOTAL_SEARCHES = 60;
 export const MAX_RESEARCH_SEARCHES_PER_CANDIDATE = 10;
 
 /** Candidates per research chunk (each chunk is one HTTP request) */
-export const RESEARCH_CANDIDATES_PER_CHUNK = 5;
+export const RESEARCH_CANDIDATES_PER_CHUNK = 2;
 
 /** Candidates per LLM call during filtering */
 export const FILTERING_BATCH_SIZE = 30;
