@@ -600,15 +600,18 @@ export async function runResearchChunk(
       } catch (err) {
         failureCount++;
 
+        const reason = err instanceof Error ? err.message : "unknown";
+        const shortReason = reason.length > 120 ? reason.slice(0, 120) + "…" : reason;
+
         auditEntries.push(auditEntry("research", "agent_error", {
           candidate: candidate.name,
-          error: err instanceof Error ? err.message : "unknown",
+          error: reason,
         }));
 
         sendProgress({
           type: "progress",
           phase: "research",
-          message: `Research failed for ${candidate.name}`,
+          message: `Research failed for ${candidate.name}: ${shortReason}`,
           current: completedSoFar + completedCount + failureCount,
           total: totalCandidates,
         });
