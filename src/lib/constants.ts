@@ -11,7 +11,7 @@ export const MAX_DISCOVERY_SEARCHES_PER_CHUNK = 15;
 export const MAX_DISCOVERY_TOTAL_SEARCHES = 60;
 
 /** Max web searches per candidate in the research phase */
-export const MAX_RESEARCH_SEARCHES_PER_CANDIDATE = 10;
+export const MAX_RESEARCH_SEARCHES_PER_CANDIDATE = 5;
 
 /** Candidates per research chunk (each chunk is one HTTP request) */
 export const RESEARCH_CANDIDATES_PER_CHUNK = 2;
