@@ -392,6 +392,16 @@ export async function runFilteringPhase(
     names: finalSurviving.map((c) => c.name),
   });
 
+  if (finalRejected.length > 0) {
+    sendProgress({
+      type: "candidates_rejected",
+      rejections: finalRejected.map((r) => ({
+        name: r.name,
+        reason: r.rejectionReason,
+      })),
+    });
+  }
+
   sendProgress({
     type: "progress",
     phase: "filtering",
@@ -601,6 +611,11 @@ export async function runResearchChunk(
           total: totalCandidates,
         });
 
+        sendProgress({
+          type: "candidate_researched",
+          candidate: agentResult.result,
+        });
+
         return agentResult.result;
       } catch (err) {
         failureCount++;
@@ -621,7 +636,13 @@ export async function runResearchChunk(
           total: totalCandidates,
         });
 
-        return makeDegradedResearchResult(candidate);
+        const degraded = makeDegradedResearchResult(candidate);
+        sendProgress({
+          type: "candidate_researched",
+          candidate: degraded,
+        });
+
+        return degraded;
       }
     }),
   );
