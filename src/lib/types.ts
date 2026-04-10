@@ -115,7 +115,25 @@ export type SSEEvent =
   | { type: "progress"; phase: "discovery" | "filtering" | "research"; message: string; current?: number; total?: number }
   | { type: "candidates_discovered"; names: string[] }
   | { type: "candidates_filtered"; names: string[] }
+  | { type: "candidates_rejected"; rejections: Array<{ name: string; reason: string }> }
+  | { type: "candidate_researched"; candidate: ResearchedCandidate }
   | { type: "chunk_done"; searchId: string }
   | { type: "result"; data: SearchResponse; searchId?: string | null }
   | { type: "error"; message: string }
   | { type: "done" };
+
+// ---------------------------------------------------------------------------
+// Live leaderboard frontend types
+// ---------------------------------------------------------------------------
+
+export type CandidatePhase = "discovered" | "filtered" | "researched" | "ranked";
+
+export interface LiveCandidate {
+  name: string;
+  phase: CandidatePhase;
+  research?: ResearchedCandidate;
+  rank?: number;
+  finalStatus?: "accepted" | "rejected";
+  rejectionReason?: string;
+  rejectionStage?: "filtering" | "research" | "score";
+}

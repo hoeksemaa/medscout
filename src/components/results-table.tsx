@@ -2,207 +2,24 @@
 
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   Download,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
   Users,
-  CheckCircle,
   XCircle,
   Lock,
 } from "lucide-react";
-import type { Candidate, SearchResponse } from "@/lib/types";
+import type { SearchResponse } from "@/lib/types";
 import { candidatesToCSV } from "@/lib/use-search";
 import { VISIBLE_RESULTS_COUNT, UNLOCK_PRICE_USD } from "@/lib/constants";
+import { CandidateCard, candidateToLive } from "@/components/candidate-card";
 
 interface ResultsTableProps {
   data: SearchResponse;
   searchId?: string | null;
   unlocked?: boolean;
-}
-
-function scoreColor(score: number): string {
-  if (score >= 70) return "bg-green-100 text-green-800 border-green-300";
-  if (score >= 40) return "bg-yellow-100 text-yellow-800 border-yellow-300";
-  return "bg-red-100 text-red-800 border-red-300";
-}
-
-function stageLabel(stage?: string): string {
-  switch (stage) {
-    case "filtering": return "Filtered";
-    case "research": return "Research";
-    case "score": return "Ranking";
-    default: return "Rejected";
-  }
-}
-
-function CandidateCard({
-  candidate,
-  expanded,
-  onToggle,
-  blurred,
-}: {
-  candidate: Candidate;
-  expanded: boolean;
-  onToggle: () => void;
-  blurred?: boolean;
-}) {
-  const isRejected = candidate.status === "rejected";
-
-  return (
-    <div
-      className={`border rounded-lg p-4 transition-colors ${
-        blurred ? "select-none" : ""
-      } ${
-        isRejected
-          ? "border-red-200 bg-red-50/30 opacity-75"
-          : "hover:bg-muted/30"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className={`flex-1 min-w-0 ${blurred ? "blur-sm pointer-events-none" : ""}`}>
-          {/* Rank + Name + Status */}
-          <div className="flex items-center gap-2 mb-1">
-            {candidate.rank > 0 && (
-              <span className="text-xs font-mono text-muted-foreground w-6 shrink-0">
-                #{candidate.rank}
-              </span>
-            )}
-            {isRejected ? (
-              <XCircle className="h-4 w-4 text-red-500 shrink-0" />
-            ) : (
-              <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-            )}
-            <h3
-              className={`font-semibold text-base truncate ${
-                isRejected ? "text-muted-foreground" : ""
-              }`}
-            >
-              {candidate.name}
-            </h3>
-            {!blurred && candidate.profileLink && (
-              <a
-                href={candidate.profileLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:text-primary/80 shrink-0"
-                title="View physician profile"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            )}
-            <Badge
-              variant="outline"
-              className={`text-xs ml-1 ${
-                isRejected
-                  ? "bg-red-100 text-red-700 border-red-300"
-                  : "bg-green-100 text-green-700 border-green-300"
-              }`}
-            >
-              {isRejected ? stageLabel(candidate.rejectionStage) : "Accepted"}
-            </Badge>
-          </div>
-
-          {/* Rejection reason */}
-          {isRejected && candidate.rejectionReason && (
-            <p className="text-sm text-red-700 ml-8 mb-2 italic">
-              {candidate.rejectionReason}
-            </p>
-          )}
-
-          {/* Summary */}
-          {candidate.summary && (
-            <p className="text-sm text-foreground/80 ml-8 mb-2">
-              {candidate.summary}
-            </p>
-          )}
-
-          {/* Key info row */}
-          {candidate.institution && candidate.institution !== "Unknown" && (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 ml-8 text-sm text-muted-foreground">
-              <span>{candidate.institution}</span>
-              {candidate.city && candidate.city !== "Unknown" && (
-                <>
-                  <span>&middot;</span>
-                  <span>{candidate.city}</span>
-                </>
-              )}
-              {candidate.specialty && candidate.specialty !== "Unknown" && (
-                <>
-                  <span>&middot;</span>
-                  <span>{candidate.specialty}</span>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Source */}
-          {candidate.source && (
-            <div className="ml-8 mt-1 text-xs text-muted-foreground">
-              <span className="font-medium">Source:</span> {candidate.source}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          {candidate.score > 0 && (
-            <Badge
-              variant="outline"
-              className={`font-mono text-xs ${blurred ? "blur-sm" : scoreColor(candidate.score)}`}
-            >
-              {candidate.score}
-            </Badge>
-          )}
-          {!blurred && candidate.summary && (
-            <Button variant="ghost" size="sm" onClick={onToggle}>
-              {expanded ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {!blurred && expanded && (
-        <div className="mt-3 ml-8 space-y-2 text-sm">
-          <Separator />
-          {candidate.evidence && (
-            <div>
-              <span className="font-medium text-muted-foreground">Evidence: </span>
-              <span>{candidate.evidence}</span>
-            </div>
-          )}
-          {candidate.source && (
-            <div>
-              <span className="font-medium text-muted-foreground">Source: </span>
-              <span>{candidate.source}</span>
-            </div>
-          )}
-          {candidate.profileLink && (
-            <div>
-              <span className="font-medium text-muted-foreground">
-                Profile:{" "}
-              </span>
-              <a
-                href={candidate.profileLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline break-all"
-              >
-                {candidate.profileLink}
-              </a>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableProps) {
@@ -304,7 +121,7 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
           {visibleAccepted.map((c) => (
             <CandidateCard
               key={c.rank}
-              candidate={c}
+              candidate={candidateToLive(c)}
               expanded={expandedIds.has(c.rank)}
               onToggle={() => toggleExpand(c.rank)}
             />
@@ -318,7 +135,7 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
                   {blurredAccepted.slice(0, 3).map((c) => (
                     <CandidateCard
                       key={c.rank}
-                      candidate={c}
+                      candidate={candidateToLive(c)}
                       expanded={false}
                       onToggle={() => {}}
                       blurred
@@ -376,7 +193,7 @@ export function ResultsTable({ data, searchId, unlocked = false }: ResultsTableP
               {rejected.map((c, i) => (
                 <CandidateCard
                   key={`rejected-${i}`}
-                  candidate={c}
+                  candidate={candidateToLive(c)}
                   expanded={expandedIds.has(c.rank)}
                   onToggle={() => toggleExpand(c.rank)}
                 />

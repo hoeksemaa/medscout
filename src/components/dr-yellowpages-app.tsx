@@ -2,8 +2,7 @@
 
 import { useCallback } from "react";
 import { SearchForm } from "@/components/search-form";
-import { SearchProgress } from "@/components/search-progress";
-import { ResultsTable } from "@/components/results-table";
+import { LiveLeaderboard } from "@/components/live-leaderboard";
 import { useSearch } from "@/lib/use-search";
 import type { CountriesData } from "@/lib/types";
 
@@ -28,7 +27,7 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
     [search],
   );
 
-  const isSearching = state.status === "searching";
+  const isSearching = state.status === "live";
 
   return (
     <div className="space-y-6">
@@ -38,21 +37,10 @@ export function DrYellowPagesApp({ countriesData }: DrYellowPagesAppProps) {
         disabled={isSearching}
       />
 
-      {state.status === "searching" && (
-        <SearchProgress
-          phase={state.phase}
-          message={state.message}
-          names={state.names}
-          current={state.current}
-          total={state.total}
+      {state.status === "live" && (
+        <LiveLeaderboard
+          live={state.live}
           onStop={stop}
-        />
-      )}
-
-      {state.status === "results" && (
-        <ResultsTable
-          data={state.data}
-          searchId={state.searchId}
         />
       )}
 
